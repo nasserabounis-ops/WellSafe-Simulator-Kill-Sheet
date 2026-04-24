@@ -1,0 +1,1609 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { 
+  Activity, AlertTriangle, Droplets, LayoutDashboard, 
+  ClipboardList, FileDigit, PlayCircle, Volume2, Square,
+  RotateCcw, Info, CheckCircle, Timer, Printer, Award,
+  HardHat, GraduationCap, GaugeCircle, ShieldCheck, ChevronRight,
+  TableProperties, Database, Layers, Check, X, ChevronDown, ChevronUp,
+  BookOpen, FileText, Target, Mic, Maximize
+} from 'lucide-react';
+
+// --- 1. STRICT API ROUNDING UTILITIES ---
+const fixFloat = (val) => Math.round(val * 1e8) / 1e8;
+const roundUp = (value, decimals = 1) => { 
+  const multiplier = Math.pow(10, decimals);
+  return Math.ceil(fixFloat(value * multiplier)) / multiplier;
+};
+const roundDown = (value, decimals = 0) => { 
+  const multiplier = Math.pow(10, decimals);
+  return Math.floor(fixFloat(value * multiplier)) / multiplier;
+};
+const roundNearest = (value) => Math.round(fixFloat(value)); 
+const round1 = (value) => Math.round(fixFloat(value) * 10) / 10; 
+const safeNum = (val) => Number(val) || 0;
+
+// --- 2. GLOBAL CSS (SCADA Theme & Native HTML Resets) ---
+function GlobalStyles() {
+  return (
+    <style dangerouslySetInnerHTML={{__html: `
+      :root { --primary: #10b981; --secondary: #0f172a; }
+      body, html, #root { margin: 0; padding: 0; height: 100dvh; width: 100vw; font-family: 'Inter', system-ui, sans-serif; overflow: hidden; }
+      .gateway-full { position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100vw; height: 100dvh; background: radial-gradient(circle at center, #1e293b 0%, #080c14 100%); display: flex; align-items: center; justify-content: center; z-index: 9999; overflow: hidden; }
+      .scada-grid { background-color: #f1f5f9; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 24px 24px; }
+      .iwcf-table th, .iwcf-table td { border: 2px solid black; padding: 4px; }
+      
+      /* Native HTML Accordion Fixes for Universal Compatibility */
+      summary { list-style: none; }
+      summary::-webkit-details-marker { display: none; }
+      details > summary::marker { display: none; }
+      
+      @media print {
+        .no-print { display: none !important; }
+        .print-area { width: 100% !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; border: none !important; background: white !important; box-shadow: none !important; }
+        .scada-grid { background: white !important; }
+        .page-break { page-break-before: always; }
+        body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        details { display: block !important; }
+        details > div { display: block !important; }
+      }
+      @keyframes drawPath { from { stroke-dashoffset: 1000; } to { stroke-dashoffset: 0; } }
+      .animate-draw { stroke-dasharray: 1000; animation: drawPath 2s ease-out forwards; }
+    `}} />
+  );
+}
+
+// --- 3. FULLSCREEN UTILITIES ---
+const enterFullscreen = () => {
+  const elem = document.documentElement;
+  if (!document.fullscreenElement) {
+    if (elem.requestFullscreen) elem.requestFullscreen().catch(() => {});
+    else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen().catch(() => {});
+    else if (elem.msRequestFullscreen) elem.msRequestFullscreen().catch(() => {});
+  }
+};
+
+const exitFullscreen = () => {
+  if (document.fullscreenElement) {
+    if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen().catch(() => {});
+    else if (document.msExitFullscreen) document.msExitFullscreen().catch(() => {});
+  }
+};
+
+// --- 4. VERIFIED SCENARIO DATA ---
+const EXAMPLES = [
+  { 
+    id: 1, title: "Standard Vertical Kick",
+    well: { date: new Date().toISOString().split('T')[0], name: "Ex 1: Standard Kick", lotPressure: 1950, testMW: 10.5, currentMW: 11.3, casingSize: 9.625, casingName: '9 5/8', shoeMD: 7950, shoeTVD: 7950, holeSize: 8.5, wellMD: 9800, wellTVD: 9800 },
+    string: { dpName: '5', dpCap: 0.01776, dpMetalDisp: 0.00650, dpClosedDisp: 0.02426, hwdpName: '5', hwdpLength: 500, hwdpCap: 0.0088, dcName: '6 1/2', dcLength: 600, dcCap: 0.00768 },
+    annulus: { ohDcCap: 0.0292, ohDpCap: 0.0459, csgDpCap: 0.0505 },
+    kick: { sidpp: 500, sicp: 700, pitGain: 13 },
+    pump: { disp1: 0.119, disp2: '', spm1: 40, spm2: '', scr1: 450, scr2: '', selectedPump: 1, activeSurfaceVol: '' }
+  },
+  { 
+    id: 2, title: "Deep Gas Influx",
+    well: { date: new Date().toISOString().split('T')[0], name: "Ex 2: PDF Page 3", lotPressure: 890, testMW: 12.0, currentMW: 12.0, casingSize: 13.375, casingName: '13 3/8', shoeMD: 5505, shoeTVD: 5505, holeSize: 12.25, wellMD: 7850, wellTVD: 7000 },
+    string: { dpName: '5', dpCap: 0.01776, dpMetalDisp: 0.00650, dpClosedDisp: 0.02426, hwdpName: '5', hwdpLength: 580, hwdpCap: 0.0088, dcName: '8', dcLength: 620, dcCap: 0.0087 },
+    annulus: { ohDcCap: 0.0836, ohDpCap: 0.1215, csgDpCap: 0.1279 },
+    kick: { sidpp: 350, sicp: 475, pitGain: 20 },
+    pump: { disp1: 0.119, disp2: '', spm1: 30, spm2: '', scr1: 350, scr2: '', selectedPump: 1, activeSurfaceVol: '' }
+  },
+  { 
+    id: 3, title: "High Pressure Reservoir",
+    well: { date: new Date().toISOString().split('T')[0], name: "Ex 3: PDF Page 4", lotPressure: 1175, testMW: 10.0, currentMW: 10.0, casingSize: 9.625, casingName: '9 5/8', shoeMD: 8850, shoeTVD: 8850, holeSize: 8.5, wellMD: 12400, wellTVD: 11960 },
+    string: { dpName: '5', dpCap: 0.01776, dpMetalDisp: 0.0065, dpClosedDisp: 0.0246, hwdpName: '5', hwdpLength: 650, hwdpCap: 0.0086, dcName: '6 1/2', dcLength: 600, dcCap: 0.0077 },
+    annulus: { ohDcCap: 0.0292, ohDpCap: 0.0459, csgDpCap: 0.0489 },
+    kick: { sidpp: 580, sicp: 840, pitGain: 20 },
+    pump: { disp1: 0.119, disp2: '', spm1: 40, spm2: '', scr1: 695, scr2: '', selectedPump: 1, activeSurfaceVol: '' }
+  },
+  { 
+    id: 4, title: "Shallow Gas Migration",
+    well: { date: new Date().toISOString().split('T')[0], name: "Ex 4: PDF Page 5", lotPressure: 2725, testMW: 12.0, currentMW: 13.5, casingSize: 9.625, casingName: '9 5/8', shoeMD: 8800, shoeTVD: 8800, holeSize: 8.5, wellMD: 12090, wellTVD: 12090 },
+    string: { dpName: '5', dpCap: 0.01776, dpMetalDisp: 0.00650, dpClosedDisp: 0.02426, hwdpName: '', hwdpLength: 0, hwdpCap: 0, dcName: '6 1/2', dcLength: 900, dcCap: 0.00768 },
+    annulus: { ohDcCap: 0.0292, ohDpCap: 0.0459, csgDpCap: 0.0505 },
+    kick: { sidpp: 200, sicp: 600, pitGain: 15 },
+    pump: { disp1: 0.109, disp2: '', spm1: 40, spm2: '', scr1: 550, scr2: '', selectedPump: 1, activeSurfaceVol: '' }
+  }
+];
+
+// --- 5. REUSABLE UI COMPONENTS ---
+
+// HTML Native Accordion Component
+const AccordionSection = ({ title, children, defaultOpen = false, colorClass = "bg-slate-800" }) => (
+  <details className="group mb-4 bg-white border border-slate-300 rounded-xl shadow-sm overflow-hidden" open={defaultOpen}>
+    <summary className={`w-full ${colorClass} text-white p-4 flex justify-between items-center cursor-pointer list-none hover:opacity-90 transition-opacity`}>
+      <span className="font-black tracking-widest uppercase text-base">{title}</span>
+      <span className="group-open:rotate-180 transition-transform duration-300 bg-white/20 p-1 rounded-full">
+        <ChevronDown className="w-5 h-5" />
+      </span>
+    </summary>
+    <div className="p-0 border-t-4 border-emerald-500 bg-white animate-in slide-in-from-top-2 duration-300">
+      {children}
+    </div>
+  </details>
+);
+
+const InstructorVoiceNote = ({ title, text, userRole }) => {
+  const [playing, setPlaying] = useState(false);
+  
+  if (userRole !== 'instructor' || !text) return null;
+  
+  return (
+    <div className="bg-slate-900 border-l-4 border-emerald-500 p-4 mb-6 rounded-xl shadow-lg flex flex-col md:flex-row gap-4 text-emerald-50 items-start md:items-center no-print relative overflow-hidden group">
+      <div className="absolute inset-0 bg-emerald-500/5 pattern-dots pointer-events-none"></div>
+      
+      <button 
+        onClick={() => setPlaying(!playing)} 
+        className={`relative z-10 flex-shrink-0 w-14 h-14 rounded-full flex items-center justify-center transition-all duration-300 ${playing ? 'bg-emerald-500 text-slate-900 shadow-[0_0_20px_rgba(16,185,129,0.5)]' : 'bg-slate-800 text-emerald-400 border-2 border-emerald-500 hover:bg-emerald-500 hover:text-slate-900'}`}
+      >
+        {playing ? <Square className="w-5 h-5 fill-current" /> : <PlayCircle className="w-7 h-7 fill-current" />}
+      </button>
+      
+      <div className="flex-1 relative z-10">
+        <div className="flex items-center gap-2 mb-1">
+          <Mic className="w-4 h-4 text-emerald-500" />
+          <strong className="text-emerald-400 uppercase tracking-widest text-xs">Instructor Voice Note {title && `• ${title}`}</strong>
+        </div>
+        <p className="text-sm font-medium leading-relaxed text-slate-300">{text}</p>
+      </div>
+      
+      {playing && (
+        <div className="flex gap-1 h-8 items-center shrink-0 relative z-10 px-4">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="w-1.5 bg-emerald-400 rounded-full animate-pulse" style={{ height: `${Math.max(30, Math.random() * 100)}%`, animationDelay: `${i * 0.15}s`, animationDuration: '0.5s' }}></div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const InstructorNoteInline = ({ text, userRole }) => {
+  if (userRole !== 'instructor' || !text) return null;
+  return (
+    <div className="group relative inline-block ml-1 text-amber-500 cursor-help no-print align-middle">
+      <Info className="w-4 h-4" />
+      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block w-64 bg-slate-900 text-amber-300 text-xs p-3 rounded-lg shadow-2xl z-50 pointer-events-none font-medium leading-relaxed border border-slate-700">
+        <div className="flex items-center gap-2 border-b border-slate-700 pb-1 mb-2">
+          <Volume2 className="w-3 h-3 text-amber-500"/> <span className="uppercase tracking-widest font-black text-[10px] text-slate-400">Audio Guide</span>
+        </div>
+        {text}
+        <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900"></div>
+      </div>
+    </div>
+  );
+};
+
+const SidebarItem = ({ id, activeTab, setActiveTab, icon: Icon, label, visible = true, highlight = false }) => {
+  if (!visible) return null;
+  return (
+    <button 
+      onClick={() => setActiveTab(id)} 
+      className={`w-full flex items-center gap-4 px-6 py-4 text-sm font-bold transition-all 
+        ${ activeTab === id ? 'bg-emerald-600 text-white border-l-4 border-emerald-400 shadow-md' : 
+           highlight ? 'text-amber-400 hover:bg-slate-800 hover:text-amber-300 border-l-4 border-transparent' : 
+           'text-slate-400 hover:bg-slate-800 hover:text-slate-200 border-l-4 border-transparent' }`}
+    >
+      <Icon className="w-5 h-5" /><span>{label}</span>
+    </button>
+  );
+};
+
+const ScadaGauge = ({ value, max, label, unit, colorClass, strokeColor }) => {
+  const pct = Math.min(100, Math.max(0, ((Number(value) || 0) / max) * 100));
+  const r = 36; const circ = 2 * Math.PI * r; const offset = circ - (pct / 100) * circ;
+  return (
+    <div className={`bg-white border-2 p-4 rounded-xl text-center shadow-md flex flex-col items-center justify-between ${colorClass}`}>
+      <span className="block text-xs font-black text-slate-700 uppercase mb-2 h-8 leading-tight">{label}</span>
+      <div className="relative w-24 h-24 flex items-center justify-center">
+        <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r={r} fill="transparent" stroke="#e2e8f0" strokeWidth="8" />
+          <circle cx="50" cy="50" r={r} fill="transparent" stroke={strokeColor} strokeWidth="8" strokeDasharray={circ} strokeDashoffset={offset} className="transition-all duration-1000 ease-out" />
+        </svg>
+        <div className="absolute flex flex-col items-center">
+          <span className="text-xl font-black text-slate-800">{value}</span>
+          <span className="text-[10px] font-bold text-slate-500 -mt-1">{unit}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const InteractiveCell = ({ name, value, onChange, correctValue, isCalculated, w = 'w-16', suffix = '', decimals = null, mode, readOnlyStyle = false }) => {
+  const displayValue = decimals !== null && correctValue !== undefined ? Number(correctValue).toFixed(decimals) : correctValue;
+  
+  if (mode === 'instructor' || isCalculated) {
+    let bgClass = "bg-white border-black text-black"; 
+    if (mode === 'student' && isCalculated) {
+      const studentVal = Number(value);
+      const expectedVal = Number(correctValue);
+      const isEmpty = value === '' || value === undefined || value === null;
+      
+      let tolerance = 0.2;
+      if (Math.abs(expectedVal) > 50) tolerance = 1;
+      if (Math.abs(expectedVal) > 500) tolerance = 3;
+      if (Math.abs(expectedVal) > 2000) tolerance = 5;
+
+      const isCorrect = !isEmpty && Math.abs(studentVal - expectedVal) <= tolerance; 
+      bgClass = isCorrect ? 'bg-emerald-100 text-emerald-900 border-emerald-500' : isEmpty ? 'bg-amber-100 text-amber-900 border-amber-500' : 'bg-rose-100 text-rose-900 border-rose-500';
+    }
+    return (
+      <div className={`inline-flex items-center justify-center ${w} px-1 py-0.5 font-bold border-2 ${bgClass}`}>
+        {mode === 'student' && isCalculated && value !== '' && Math.abs(Number(value) - Number(correctValue)) > 0.5 && (
+          <span className="line-through text-[10px] mr-1 opacity-60 leading-none text-rose-700">{value}</span>
+        )}
+        <span>{displayValue}</span>
+        {suffix && <span className="text-xs ml-1 opacity-70">{suffix}</span>}
+      </div>
+    );
+  }
+  
+  if (readOnlyStyle) {
+    return (
+      <div className={`inline-flex items-center justify-center ${w} px-1 py-0.5 font-bold border-2 border-black bg-slate-100`}>
+        <span>{displayValue}</span>
+        {suffix && <span className="text-xs ml-1 opacity-70">{suffix}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="inline-flex items-center">
+      <input 
+        type="number" name={name} value={value === undefined ? '' : value} onChange={onChange || (() => {})} readOnly={!onChange} placeholder="?" 
+        className={`${w} bg-yellow-50 border-2 border-slate-400 text-center font-bold text-blue-900 shadow-inner focus:outline-none focus:border-blue-600 transition-colors px-1 py-0.5`} 
+      />
+      {suffix && <span className="text-xs ml-1 font-bold text-slate-600">{suffix}</span>}
+    </div>
+  );
+};
+
+const OutputRow = ({ label, name, correctValue, isCalculated, userRole, decimals, suffix, studentData, handleStudentInput }) => (
+  <div className="flex justify-between items-center border-b border-slate-200 py-3 hover:bg-slate-50 transition-colors px-2 rounded">
+    <span className="font-bold text-slate-700 text-sm w-2/3 pr-2 leading-tight">{label}</span>
+    <InteractiveCell 
+      name={name} value={studentData[name]} onChange={handleStudentInput} 
+      correctValue={correctValue} isCalculated={isCalculated} mode={userRole} 
+      decimals={decimals} suffix={suffix} w="w-24" 
+    />
+  </div>
+);
+
+// --- 6. PURE CALCULATION ENGINE ---
+const calculateKillSheet = (wellData, pumpData, stringData, annulusData, kickData) => {
+  const activeDisp = pumpData.selectedPump == 1 ? safeNum(pumpData.disp1) : safeNum(pumpData.disp2);
+  const activeScr = pumpData.selectedPump == 1 ? safeNum(pumpData.scr1) : safeNum(pumpData.scr2);
+  const activeSpm = pumpData.selectedPump == 1 ? safeNum(pumpData.spm1) : safeNum(pumpData.spm2);
+
+  const mamwRaw = (safeNum(wellData.lotPressure) / ((safeNum(wellData.shoeTVD) || 1) * 0.052)) + safeNum(wellData.testMW);
+  const mamw = safeNum(wellData.shoeTVD) > 0 ? roundDown(mamwRaw, 1) : 0;
+  const initialMaasp = roundDown((mamw - safeNum(wellData.currentMW)) * safeNum(wellData.shoeTVD) * 0.052, 0);
+  
+  const kmwRaw = (safeNum(kickData.sidpp) / ((safeNum(wellData.wellTVD) || 1) * 0.052)) + safeNum(wellData.currentMW);
+  const kmw = safeNum(wellData.wellTVD) > 0 ? roundUp(kmwRaw, 1) : 0;
+  const finalMaasp = roundDown((mamw - kmw) * safeNum(wellData.shoeTVD) * 0.052, 0);
+
+  const icp = roundNearest(safeNum(kickData.sidpp) + activeScr);
+  const fcp = safeNum(wellData.currentMW) > 0 ? roundNearest(activeScr * (kmw / safeNum(wellData.currentMW))) : 0;
+
+  const dpLength = Math.max(0, safeNum(wellData.wellMD) - safeNum(stringData.hwdpLength) - safeNum(stringData.dcLength));
+  const dpVol = round1(dpLength * safeNum(stringData.dpCap));
+  const hwdpVol = round1(safeNum(stringData.hwdpLength) * safeNum(stringData.hwdpCap));
+  const dcVol = round1(safeNum(stringData.dcLength) * safeNum(stringData.dcCap));
+  const stringVol = round1(dpVol + hwdpVol + dcVol);
+  const stringStks = activeDisp > 0 ? roundNearest(stringVol / activeDisp) : 0;
+  const stringTime = activeSpm > 0 ? roundNearest(stringStks / activeSpm) : 0;
+
+  const ohLength = Math.max(0, safeNum(wellData.wellMD) - safeNum(wellData.shoeMD));
+  const dcOhLength = Math.min(safeNum(stringData.dcLength), ohLength);
+  const dcOhVol = round1(dcOhLength * safeNum(annulusData.ohDcCap));
+  const dpHwdpOhLength = Math.max(0, ohLength - dcOhLength);
+  const dpHwdpOhVol = round1(dpHwdpOhLength * safeNum(annulusData.ohDpCap));
+  const ohVol = round1(dcOhVol + dpHwdpOhVol);
+  const ohStks = activeDisp > 0 ? roundNearest(ohVol / activeDisp) : 0;
+  const ohTime = activeSpm > 0 ? roundNearest(ohStks / activeSpm) : 0;
+
+  const dpCsgLength = safeNum(wellData.shoeMD);
+  const dpCsgVol = round1(dpCsgLength * safeNum(annulusData.csgDpCap));
+  const annVol = round1(ohVol + dpCsgVol);
+  const annStks = activeDisp > 0 ? roundNearest(annVol / activeDisp) : 0;
+  const annTime = activeSpm > 0 ? roundNearest(annStks / activeSpm) : 0;
+
+  const totalWellVol = round1(stringVol + annVol);
+  const totalWellStks = activeDisp > 0 ? roundNearest(totalWellVol / activeDisp) : 0;
+  const totalWellTime = activeSpm > 0 ? roundNearest(totalWellStks / activeSpm) : 0;
+
+  const activeSurfVol = safeNum(pumpData.activeSurfaceVol);
+  const activeSurfStks = activeDisp > 0 ? roundNearest(activeSurfVol / activeDisp) : 0;
+  const activeSurfTime = activeSpm > 0 ? roundNearest(activeSurfStks / activeSpm) : 0;
+
+  const totalActiveVol = round1(totalWellVol + activeSurfVol);
+  const totalActiveStks = activeDisp > 0 ? roundNearest(totalActiveVol / activeDisp) : 0;
+  const totalActiveTime = activeSpm > 0 ? roundNearest(totalActiveStks / activeSpm) : 0;
+
+  const pressureDropTotal = icp - fcp;
+  const pressureDropPerTenth = stringStks > 0 ? roundNearest(pressureDropTotal / 10) : 0;
+  const pressureDropPer100 = stringStks > 0 ? round1((pressureDropTotal * 100) / stringStks) : 0;
+
+  const chart = [];
+  if (stringStks > 0) {
+    for (let i = 0; i <= 10; i++) {
+      let currentStrokes = i === 10 ? stringStks : roundNearest(i * (stringStks / 10));
+      let currentPressure = i === 10 ? fcp : roundNearest(icp - (i * (pressureDropTotal / 10)));
+      chart.push({ step: i, strokes: currentStrokes, pressure: currentPressure });
+    }
+  }
+
+  return { 
+    kmw, mamw, initialMaasp, finalMaasp, icp, fcp, 
+    dpLength, dpVol, hwdpVol, dcVol, stringVol, stringStks, stringTime,
+    dcOhLength, dcOhVol, dpHwdpOhLength, dpHwdpOhVol, ohVol, ohStks, ohTime,
+    dpCsgLength, dpCsgVol, annVol, annStks, annTime,
+    totalWellVol, totalWellStks, totalWellTime,
+    activeSurfVol, activeSurfStks, activeSurfTime,
+    totalActiveVol, totalActiveStks, totalActiveTime,
+    pressureDropTotal, pressureDropPerTenth, pressureDropPer100, chart 
+  };
+};
+
+// --- 7. EXTRACTED SECTION COMPONENTS (WITH HTML ACCORDIONS) ---
+const DataEntrySection = ({ wellData, setWellData, stringData, setStringData, annulusData, setAnnulusData, pumpData, setPumpData, kickData, setKickData, handleInput }) => (
+  <div className="space-y-4 text-sm">
+    <AccordionSection title="Hole Dimensions" defaultOpen={true}>
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700">Depth (MD/TVD)</div>
+        <div className="col-span-4 flex gap-2">
+          <input type="number" name="wellMD" value={wellData.wellMD || ''} onChange={handleInput(setWellData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" placeholder="MD" />
+          <input type="number" name="wellTVD" value={wellData.wellTVD || ''} onChange={handleInput(setWellData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" placeholder="TVD" />
+        </div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">feet</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700 flex items-center gap-2">
+          <input type="text" name="casingName" value={wellData.casingName || ''} onChange={handleInput(setWellData)} className="w-16 border-2 border-slate-300 rounded p-1 text-center font-bold" placeholder='9 5/8' />" Casing shoe
+        </div>
+        <div className="col-span-4 flex gap-2">
+          <input type="number" name="shoeMD" value={wellData.shoeMD || ''} onChange={handleInput(setWellData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" placeholder="MD" />
+          <input type="number" name="shoeTVD" value={wellData.shoeTVD || ''} onChange={handleInput(setWellData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" placeholder="TVD" />
+        </div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">feet</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700">Hole size</div>
+        <div className="col-span-4"><input type="number" name="holeSize" value={wellData.holeSize || ''} onChange={handleInput(setWellData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">inch</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700">Current mud weight</div>
+        <div className="col-span-4"><input type="number" name="currentMW" value={wellData.currentMW || ''} onChange={handleInput(setWellData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">ppg</div>
+      </div>
+    </AccordionSection>
+
+    <AccordionSection title="Internal Capacities">
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700 flex items-center gap-2 flex-wrap">
+          <input type="text" name="dcName" value={stringData.dcName || ''} onChange={handleInput(setStringData)} className="w-16 border-2 border-slate-300 rounded p-1 text-center font-bold" placeholder="6 1/2" />" Drill collars (length <input type="number" name="dcLength" value={stringData.dcLength || ''} onChange={handleInput(setStringData)} className="w-20 border-2 border-slate-300 rounded p-1 text-center font-bold focus:border-emerald-500" /> feet)
+        </div>
+        <div className="col-span-4"><input type="number" name="dcCap" value={stringData.dcCap || ''} onChange={handleInput(setStringData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">bbl/foot</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700 flex items-center gap-2">
+          <input type="text" name="dpName" value={stringData.dpName || ''} onChange={handleInput(setStringData)} className="w-16 border-2 border-slate-300 rounded p-1 text-center font-bold" placeholder="5" />" Drill pipe - capacity
+        </div>
+        <div className="col-span-4"><input type="number" name="dpCap" value={stringData.dpCap || ''} onChange={handleInput(setStringData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">bbl/foot</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700 flex items-center gap-2 text-slate-500">
+          <span className="w-16 inline-block text-center">{stringData.dpName || '5'}</span>" Drill pipe - metal displacement
+        </div>
+        <div className="col-span-4"><input type="number" name="dpMetalDisp" value={stringData.dpMetalDisp || ''} onChange={handleInput(setStringData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500 bg-slate-50" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">bbl/foot</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700 flex items-center gap-2 text-slate-500">
+          <span className="w-16 inline-block text-center">{stringData.dpName || '5'}</span>" Drill pipe - closed end displacement
+        </div>
+        <div className="col-span-4"><input type="number" name="dpClosedDisp" value={stringData.dpClosedDisp || ''} onChange={handleInput(setStringData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500 bg-slate-50" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">bbl/foot</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700 flex items-center gap-2 flex-wrap">
+          <input type="text" name="hwdpName" value={stringData.hwdpName || ''} onChange={handleInput(setStringData)} className="w-16 border-2 border-slate-300 rounded p-1 text-center font-bold" placeholder="5" />" HWDP (length <input type="number" name="hwdpLength" value={stringData.hwdpLength || ''} onChange={handleInput(setStringData)} className="w-20 border-2 border-slate-300 rounded p-1 text-center font-bold focus:border-emerald-500" /> feet) - capacity
+        </div>
+        <div className="col-span-4"><input type="number" name="hwdpCap" value={stringData.hwdpCap || ''} onChange={handleInput(setStringData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">bbl/foot</div>
+      </div>
+    </AccordionSection>
+
+    <AccordionSection title="Annular Capacities">
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700">Open hole / Drill collar</div>
+        <div className="col-span-4"><input type="number" name="ohDcCap" value={annulusData.ohDcCap || ''} onChange={handleInput(setAnnulusData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">bbl/foot</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700">Open hole / Drill pipe</div>
+        <div className="col-span-4"><input type="number" name="ohDpCap" value={annulusData.ohDpCap || ''} onChange={handleInput(setAnnulusData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">bbl/foot</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700">Casing / Drill pipe</div>
+        <div className="col-span-4"><input type="number" name="csgDpCap" value={annulusData.csgDpCap || ''} onChange={handleInput(setAnnulusData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">bbl/foot</div>
+      </div>
+    </AccordionSection>
+
+    <AccordionSection title="Leak-Off Test (LOT)">
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700">Shoe test mud weight</div>
+        <div className="col-span-4"><input type="number" name="testMW" value={wellData.testMW || ''} onChange={handleInput(setWellData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">ppg</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700">Leak off pressure</div>
+        <div className="col-span-4"><input type="number" name="lotPressure" value={wellData.lotPressure || ''} onChange={handleInput(setWellData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">psi</div>
+      </div>
+    </AccordionSection>
+
+    <AccordionSection title="Pump Details" colorClass="bg-blue-900">
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700">Pump Output</div>
+        <div className="col-span-4"><input type="number" name="disp1" value={pumpData.disp1 || ''} onChange={handleInput(setPumpData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">bbl/stk</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 border-b border-slate-200 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700 flex items-center gap-2">
+          SCR at <input type="number" name="spm1" value={pumpData.spm1 || ''} onChange={handleInput(setPumpData)} className="w-16 border-2 border-slate-300 rounded p-1 text-center font-bold focus:border-emerald-500" /> SPM
+        </div>
+        <div className="col-span-4"><input type="number" name="scr1" value={pumpData.scr1 || ''} onChange={handleInput(setPumpData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">psi</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-slate-50 transition-colors">
+        <div className="col-span-7 font-bold text-slate-700">Active Surface Vol</div>
+        <div className="col-span-4"><input type="number" name="activeSurfaceVol" value={pumpData.activeSurfaceVol || ''} onChange={handleInput(setPumpData)} className="w-full border-2 border-slate-300 rounded p-2 text-center font-bold focus:border-emerald-500" /></div>
+        <div className="col-span-1 text-slate-500 font-bold text-right">bbls</div>
+      </div>
+    </AccordionSection>
+
+    <AccordionSection title="Shut In Data (Kick)" colorClass="bg-rose-900" defaultOpen={true}>
+      <div className="grid grid-cols-12 gap-4 border-b border-rose-200 p-4 items-center bg-rose-50/50 hover:bg-rose-50 transition-colors">
+        <div className="col-span-7 font-bold text-rose-800">SIDPP</div>
+        <div className="col-span-4"><input type="number" name="sidpp" value={kickData.sidpp || ''} onChange={handleInput(setKickData)} className="w-full border-2 border-rose-300 rounded p-2 text-center font-bold focus:border-rose-500" /></div>
+        <div className="col-span-1 text-rose-600 font-bold text-right">psi</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 border-b border-rose-200 p-4 items-center bg-rose-50/50 hover:bg-rose-50 transition-colors">
+        <div className="col-span-7 font-bold text-rose-800">SICP</div>
+        <div className="col-span-4"><input type="number" name="sicp" value={kickData.sicp || ''} onChange={handleInput(setKickData)} className="w-full border-2 border-rose-300 rounded p-2 text-center font-bold focus:border-rose-500" /></div>
+        <div className="col-span-1 text-rose-600 font-bold text-right">psi</div>
+      </div>
+      <div className="grid grid-cols-12 gap-4 p-4 items-center bg-rose-50/50 hover:bg-rose-50 transition-colors">
+        <div className="col-span-7 font-bold text-rose-800">Pit gain</div>
+        <div className="col-span-4"><input type="number" name="pitGain" value={kickData.pitGain || ''} onChange={handleInput(setKickData)} className="w-full border-2 border-rose-300 rounded p-2 text-center font-bold focus:border-rose-500" /></div>
+        <div className="col-span-1 text-rose-600 font-bold text-right">bbls</div>
+      </div>
+    </AccordionSection>
+  </div>
+);
+
+const MasterKillSheetSection = ({ wellData, pumpData, stringData, annulusData, kickData, studentData, handleStudentInput, calc, isCalculated, userRole, hideSubmit, onStandardSubmit, showOutput, setShowOutput }) => (
+  <div>
+    <InstructorVoiceNote userRole={userRole} title="Kill Sheet Overview" text="Welcome to the Master Kill Sheet. This form automatically calculates responses as data is entered on the Data Entry tab. Pay attention to the inline info icons next to critical equations for explanations of the mathematical procedures applied." />
+
+    <div className="bg-white border-[3px] border-black p-6 font-sans text-xs text-black shadow-2xl print-area mb-8 relative">
+      {userRole === 'student' && !isCalculated && !hideSubmit && (
+        <div className="absolute top-4 right-4 bg-amber-100 text-amber-800 px-4 py-2 font-black border-2 border-amber-500 rounded animate-pulse shadow-lg z-10 no-print">TEST IN PROGRESS</div>
+      )}
+      
+      <div className="flex justify-between items-start border-b-[3px] border-black pb-2 mb-2 font-bold">
+        <div className="text-base leading-tight">International<br/>Well Control Forum</div>
+        <div className="text-center">
+          <h1 className="text-2xl font-black tracking-wide">Surface BOP Vertical Well Kill Sheet</h1>
+          <h2 className="text-sm">(API Field Units)</h2>
+        </div>
+        <div className="text-right flex flex-col gap-1 w-48">
+          <div className="flex justify-between">DATE: <span className="border-b border-black flex-1 ml-2 text-center">{wellData.date || new Date().toISOString().split('T')[0]}</span></div>
+          <div className="flex justify-between">NAME: <span className="border-b border-black flex-1 ml-2 text-center">{wellData.name || ' '}</span></div>
+        </div>
+      </div>
+
+      <div className="flex border-[3px] border-black mb-2">
+        <div className="w-1/2 border-r-[3px] border-black p-2 flex flex-col justify-between">
+          <div>
+            <h3 className="font-bold underline mb-2">FORMATION STRENGTH DATA:</h3>
+            <div className="flex justify-between mb-1 items-center">
+              <span>SURFACE LEAK-OFF PRESSURE FROM FORMATION STRENGTH TEST (A)</span>
+              <div className="flex items-center gap-1"><span className="font-bold border-b border-black w-16 text-center inline-block">{wellData.lotPressure}</span> psi</div>
+            </div>
+            <div className="flex justify-between mb-4 items-center">
+              <span>MUD DENSITY AT TEST (B)</span>
+              <div className="flex items-center gap-1"><span className="font-bold border-b border-black w-16 text-center inline-block">{wellData.testMW}</span> ppg</div>
+            </div>
+            <div className="mb-4">
+              <div className="flex items-center justify-between font-bold">
+                <span className="flex items-center">MAXIMUM ALLOWABLE MUD DENSITY = <InstructorNoteInline userRole={userRole} text="MAMW Formula: (LOT Pressure ÷ (Shoe TVD × 0.052)) + Test Mud Weight. Always round DOWN to nearest 1 decimal place." /></span>
+                <InteractiveCell name="mamw" value={studentData.mamw} onChange={handleStudentInput} correctValue={calc.mamw} isCalculated={isCalculated} mode={userRole} decimals={1} w="w-16" />
+                <span>ppg</span>
+              </div>
+              <div className="text-center w-full block ml-4">(A) / (SHOE T.V. DEPTH x 0.052) + (B) = (C)</div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between font-bold">
+                <span className="flex items-center">INITIAL MAASP = <InstructorNoteInline userRole={userRole} text="Initial MAASP Formula: ((MAMW - Current MW) × Shoe TVD × 0.052). Always round DOWN to nearest whole number to ensure structural safety." /></span>
+                <InteractiveCell name="initialMaasp" value={studentData.initialMaasp} onChange={handleStudentInput} correctValue={calc.initialMaasp} isCalculated={isCalculated} mode={userRole} w="w-16" />
+                <span>psi</span>
+              </div>
+              <div className="text-center w-full block ml-4">((C) - CURRENT MUD DENSITY) x SHOE T.V. DEPTH x 0.052</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="w-1/2 p-2 flex flex-col justify-between">
+          <div>
+            <h3 className="font-bold underline mb-1">CURRENT WELL DATA:</h3>
+            <div className="flex gap-4 items-center">
+              <span className="font-bold">CURRENT DRILLING MUD:</span>
+              <span className="flex-1 flex justify-between border-b border-black px-1">DENSITY <span className="font-bold">{wellData.currentMW}</span> ppg</span>
+            </div>
+            <div className="flex mt-2">
+              <div className="w-1/2">
+                <h4 className="font-bold">CASING SHOE DATA:</h4>
+                <div className="flex justify-between pl-2">SIZE <span className="border-b border-black w-16 text-center font-bold">{wellData.casingName}</span> inch</div>
+                <div className="flex justify-between pl-2 mt-1">M. DEPTH <span className="border-b border-black w-16 text-center font-bold">{wellData.shoeMD}</span> feet</div>
+                <div className="flex justify-between pl-2 mt-1">T.V. DEPTH <span className="border-b border-black w-16 text-center font-bold">{wellData.shoeTVD}</span> feet</div>
+              </div>
+              <div className="w-1/2 border-l border-black pl-2">
+                <h4 className="font-bold">HOLE DATA:</h4>
+                <div className="flex justify-between pl-2">SIZE <span className="border-b border-black w-16 text-center font-bold">{wellData.holeSize}</span> inch</div>
+                <div className="flex justify-between pl-2 mt-1">M. DEPTH <span className="border-b border-black w-16 text-center font-bold">{wellData.wellMD}</span> feet</div>
+                <div className="flex justify-between pl-2 mt-1">T.V. DEPTH <span className="border-b border-black w-16 text-center font-bold">{wellData.wellTVD}</span> feet</div>
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 border-t-2 border-black pt-2">
+            <div className="flex justify-between mb-2">
+              <span className="font-bold">PUMP NO. 1 DISPL. <span className="border-b border-black w-12 inline-block text-center">{pumpData.disp1}</span> bbls / stroke</span>
+              <span className="font-bold">PUMP NO. 2 DISPL. <span className="border-b border-black w-12 inline-block text-center">{pumpData.disp2}</span> bbls / stroke</span>
+            </div>
+            <table className="w-full text-center border-collapse border-2 border-black iwcf-table text-[10px] font-bold">
+              <thead className="bg-slate-100">
+                <tr>
+                  <th rowSpan="2" className="border-2 border-black p-1">SLOW PUMP<br/>RATE DATA:</th>
+                  <th colSpan="2" className="border-2 border-black p-1">(PL) DYNAMIC PRESSURE LOSS [psi]</th>
+                </tr>
+                <tr>
+                  <th className="border-2 border-black p-1">PUMP NO. 1</th>
+                  <th className="border-2 border-black p-1">PUMP NO. 2</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="border-2 border-black p-1">{pumpData.spm1} SPM</td>
+                  <td className="border-2 border-black p-1">{pumpData.scr1}</td>
+                  <td className="border-2 border-black p-1 bg-slate-200"></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <table className="w-full border-collapse border-[3px] border-black text-center font-bold iwcf-table text-xs">
+        <thead className="bg-slate-100 border-b-[3px] border-black">
+          <tr>
+            <th className="p-2 border-r-2 border-black text-left w-1/4">PRE-RECORDED<br/>VOLUME DATA:</th>
+            <th className="p-2 border-r-2 border-black">LENGTH<br/>feet</th>
+            <th className="p-2 border-r-2 border-black">CAPACITY<br/>bbls/foot</th>
+            <th className="p-2 border-r-2 border-black">VOLUME<br/>barrels</th>
+            <th className="p-2 border-r-2 border-black">PUMP STROKES<br/>strokes</th>
+            <th className="p-2">TIME<br/>minutes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td className="text-left p-1 border-r-2 border-black bg-slate-50">DRILL PIPE</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="dpLength" value={studentData.dpLength} onChange={handleStudentInput} correctValue={calc.dpLength} isCalculated={isCalculated} mode={userRole} /></td>
+            <td className="p-1 border-r-2 border-black bg-slate-50">X <span className="w-12 inline-block border-b border-black">{stringData.dpCap}</span> =</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="dpVol" value={studentData.dpVol} onChange={handleStudentInput} correctValue={calc.dpVol} isCalculated={isCalculated} mode={userRole} decimals={1} /></td>
+            <td rowSpan="3" colSpan="2" className="p-1 align-top relative">
+              <div className="absolute top-2 left-0 w-full flex flex-col items-center">
+                <span className="mb-1">PUMP DISPLACEMENT</span>
+                <span className="border-b border-black w-20 text-center">{pumpData.disp1}</span>
+                <span className="mt-4 mb-1">SLOW PUMP RATE</span>
+                <span className="border-b border-black w-20 text-center">{pumpData.spm1}</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td className="text-left p-1 border-r-2 border-black bg-slate-50">HEAVY WALL DRILL PIPE</td>
+            <td className="p-1 border-r-2 border-black"><span className="w-16 inline-block border-b border-black">{stringData.hwdpLength}</span></td>
+            <td className="p-1 border-r-2 border-black bg-slate-50">X <span className="w-12 inline-block border-b border-black">{stringData.hwdpCap}</span> = +</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="hwdpVol" value={studentData.hwdpVol} onChange={handleStudentInput} correctValue={calc.hwdpVol} isCalculated={isCalculated} mode={userRole} decimals={1} /></td>
+          </tr>
+          <tr>
+            <td className="text-left p-1 border-r-2 border-black bg-slate-50">DRILL COLLARS</td>
+            <td className="p-1 border-r-2 border-black"><span className="w-16 inline-block border-b border-black">{stringData.dcLength}</span></td>
+            <td className="p-1 border-r-2 border-black bg-slate-50">X <span className="w-12 inline-block border-b border-black">{stringData.dcCap}</span> = +</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="dcVol" value={studentData.dcVol} onChange={handleStudentInput} correctValue={calc.dcVol} isCalculated={isCalculated} mode={userRole} decimals={1} /></td>
+          </tr>
+          <tr className="bg-slate-200 border-t-[3px] border-b-[3px] border-black">
+            <td colSpan="3" className="text-right p-1 border-r-2 border-black pr-2">
+              DRILL STRING VOLUME (D)
+              <InstructorNoteInline userRole={userRole} text="String Volume Formula: Sum of all internal tubular volumes. Ensure you are using true measured lengths for the calculation." />
+            </td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="stringVol" value={studentData.stringVol} onChange={handleStudentInput} correctValue={calc.stringVol} isCalculated={isCalculated} mode={userRole} decimals={1} suffix=" bbls" /></td>
+            <td className="p-1 border-r-2 border-black">(E) <InteractiveCell name="stringStks" value={studentData.stringStks} onChange={handleStudentInput} correctValue={calc.stringStks} isCalculated={isCalculated} mode={userRole} /> strokes</td>
+            <td className="p-1"><InteractiveCell name="stringTime" value={studentData.stringTime} onChange={handleStudentInput} correctValue={calc.stringTime} isCalculated={isCalculated} mode={userRole} suffix=" Min" /></td>
+          </tr>
+          <tr>
+            <td className="text-left p-1 border-r-2 border-black bg-slate-50">DC x OPEN HOLE</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="dcOhLength" value={studentData.dcOhLength} onChange={handleStudentInput} correctValue={calc.dcOhLength} isCalculated={isCalculated} mode={userRole} /></td>
+            <td className="p-1 border-r-2 border-black bg-slate-50">X <span className="w-12 inline-block border-b border-black">{annulusData.ohDcCap}</span> =</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="dcOhVol" value={studentData.dcOhVol} onChange={handleStudentInput} correctValue={calc.dcOhVol} isCalculated={isCalculated} mode={userRole} decimals={1} /></td>
+            <td colSpan="2" rowSpan="2" className="bg-slate-100"></td>
+          </tr>
+          <tr>
+            <td className="text-left p-1 border-r-2 border-black bg-slate-50">DP/HWDP x OPEN HOLE</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="dpHwdpOhLength" value={studentData.dpHwdpOhLength} onChange={handleStudentInput} correctValue={calc.dpHwdpOhLength} isCalculated={isCalculated} mode={userRole} /></td>
+            <td className="p-1 border-r-2 border-black bg-slate-50">X <span className="w-12 inline-block border-b border-black">{annulusData.ohDpCap}</span> = +</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="dpHwdpOhVol" value={studentData.dpHwdpOhVol} onChange={handleStudentInput} correctValue={calc.dpHwdpOhVol} isCalculated={isCalculated} mode={userRole} decimals={1} /></td>
+          </tr>
+          <tr className="bg-slate-200 border-t-2 border-b-2 border-black">
+            <td colSpan="3" className="text-right p-1 border-r-2 border-black pr-2">OPEN HOLE VOLUME (F)</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="ohVol" value={studentData.ohVol} onChange={handleStudentInput} correctValue={calc.ohVol} isCalculated={isCalculated} mode={userRole} decimals={1} suffix=" bbls" /></td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="ohStks" value={studentData.ohStks} onChange={handleStudentInput} correctValue={calc.ohStks} isCalculated={isCalculated} mode={userRole} /> strokes</td>
+            <td className="p-1"><InteractiveCell name="ohTime" value={studentData.ohTime} onChange={handleStudentInput} correctValue={calc.ohTime} isCalculated={isCalculated} mode={userRole} suffix=" Min" /></td>
+          </tr>
+          <tr>
+            <td className="text-left p-1 border-r-2 border-black bg-slate-50">DP x CASING</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="dpCsgLength" value={studentData.dpCsgLength} onChange={handleStudentInput} correctValue={calc.dpCsgLength} isCalculated={isCalculated} mode={userRole} /></td>
+            <td className="p-1 border-r-2 border-black bg-slate-50">X <span className="w-12 inline-block border-b border-black">{annulusData.csgDpCap}</span> = (G)</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="dpCsgVol" value={studentData.dpCsgVol} onChange={handleStudentInput} correctValue={calc.dpCsgVol} isCalculated={isCalculated} mode={userRole} decimals={1} /></td>
+            <td colSpan="2" className="bg-slate-100"></td>
+          </tr>
+          <tr className="bg-slate-200 border-t-[3px] border-black">
+            <td colSpan="3" className="text-right p-1 border-r-2 border-black pr-2">TOTAL ANNULUS VOLUME (F+G) = (H)</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="annVol" value={studentData.annVol} onChange={handleStudentInput} correctValue={calc.annVol} isCalculated={isCalculated} mode={userRole} decimals={1} suffix=" bbls" /></td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="annStks" value={studentData.annStks} onChange={handleStudentInput} correctValue={calc.annStks} isCalculated={isCalculated} mode={userRole} /> strokes</td>
+            <td className="p-1"><InteractiveCell name="annTime" value={studentData.annTime} onChange={handleStudentInput} correctValue={calc.annTime} isCalculated={isCalculated} mode={userRole} suffix=" Min" /></td>
+          </tr>
+          <tr className="bg-slate-300 border-t-2 border-black">
+            <td colSpan="3" className="text-right p-1 border-r-2 border-black pr-2">TOTAL WELL SYSTEM VOLUME (D+H) = (I)</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="totalWellVol" value={studentData.totalWellVol} onChange={handleStudentInput} correctValue={calc.totalWellVol} isCalculated={isCalculated} mode={userRole} decimals={1} suffix=" bbls" /></td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="totalWellStks" value={studentData.totalWellStks} onChange={handleStudentInput} correctValue={calc.totalWellStks} isCalculated={isCalculated} mode={userRole} /> strokes</td>
+            <td className="p-1"><InteractiveCell name="totalWellTime" value={studentData.totalWellTime} onChange={handleStudentInput} correctValue={calc.totalWellTime} isCalculated={isCalculated} mode={userRole} suffix=" Min" /></td>
+          </tr>
+          <tr className="border-t-2 border-black bg-slate-50">
+            <td colSpan="3" className="text-right p-1 border-r-2 border-black pr-2">ACTIVE SURFACE VOLUME (J)</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="activeSurfVol" value={studentData.activeSurfVol} onChange={handleStudentInput} correctValue={calc.activeSurfVol} isCalculated={isCalculated} mode={userRole} suffix=" bbls" /> +</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="activeSurfStks" value={studentData.activeSurfStks} onChange={handleStudentInput} correctValue={calc.activeSurfStks} isCalculated={isCalculated} mode={userRole} /> strokes</td>
+            <td className="p-1"><InteractiveCell name="activeSurfTime" value={studentData.activeSurfTime} onChange={handleStudentInput} correctValue={calc.activeSurfTime} isCalculated={isCalculated} mode={userRole} suffix=" Min" /></td>
+          </tr>
+          <tr className="bg-slate-300 border-t-[3px] border-black">
+            <td colSpan="3" className="text-right p-1 border-r-2 border-black pr-2">TOTAL ACTIVE FLUID SYSTEM (I+J)</td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="totalActiveVol" value={studentData.totalActiveVol} onChange={handleStudentInput} correctValue={calc.totalActiveVol} isCalculated={isCalculated} mode={userRole} decimals={1} suffix=" bbls" /></td>
+            <td className="p-1 border-r-2 border-black"><InteractiveCell name="totalActiveStks" value={studentData.totalActiveStks} onChange={handleStudentInput} correctValue={calc.totalActiveStks} isCalculated={isCalculated} mode={userRole} /> strokes</td>
+            <td className="p-1"><InteractiveCell name="totalActiveTime" value={studentData.totalActiveTime} onChange={handleStudentInput} correctValue={calc.totalActiveTime} isCalculated={isCalculated} mode={userRole} suffix=" Min" /></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div className="bg-white border-[3px] border-black p-6 font-sans text-xs text-black shadow-2xl print-area page-break relative">
+      {userRole === 'student' && !isCalculated && !hideSubmit && (
+        <div className="absolute top-4 right-4 bg-amber-100 text-amber-800 px-4 py-2 font-black border-2 border-amber-500 rounded animate-pulse shadow-lg z-10 no-print">TEST IN PROGRESS</div>
+      )}
+      
+      <div className="flex justify-between items-start border-b-[3px] border-black pb-2 mb-4 font-bold">
+        <div className="text-base leading-tight">International<br/>Well Control Forum</div>
+        <div className="text-center">
+          <h1 className="text-2xl font-black tracking-wide">Surface BOP Kill Sheet - Vertical Well</h1>
+          <h2 className="text-sm">(API Field Units)</h2>
+        </div>
+        <div className="text-right flex flex-col gap-1 w-48">
+          <div className="flex justify-between">DATE: <span className="border-b border-black flex-1 ml-2 text-center">{wellData.date || new Date().toISOString().split('T')[0]}</span></div>
+          <div className="flex justify-between">NAME: <span className="border-b border-black flex-1 ml-2 text-center">{wellData.name || ' '}</span></div>
+        </div>
+      </div>
+
+      <div className="flex gap-4 mb-4">
+        <div className="w-1/3 border-[3px] border-black p-2 bg-slate-50 flex flex-col justify-between">
+          <h3 className="font-black underline mb-4 text-base">KICK DATA:</h3>
+          <div className="flex justify-between font-bold text-sm mb-4">SIDPP <span className="border-b border-black w-16 text-center">{kickData.sidpp}</span> psi</div>
+          <div className="flex justify-between font-bold text-sm mb-4">SICP <span className="border-b border-black w-16 text-center">{kickData.sicp}</span> psi</div>
+          <div className="flex justify-between font-bold text-sm">PIT GAIN <span className="border-b border-black w-16 text-center">{kickData.pitGain}</span> barrels</div>
+        </div>
+
+        <div className="w-2/3 border-[3px] border-black p-4 flex flex-col justify-between">
+          <div className="flex justify-between items-center mb-2">
+            <span className="font-black text-sm flex items-center">
+              KILL MUD DENSITY
+              <InstructorNoteInline userRole={userRole} text="KMW Formula: SIDPP ÷ (Well TVD × 0.052) + Current MW. Remember to round UP to the nearest 0.1 ppg to keep the well securely overbalanced." />
+            </span>
+            <div className="flex items-center gap-2 font-bold bg-slate-100 p-2 border border-black">
+              <div className="flex flex-col items-center">
+                <span className="border-b border-black px-2">{kickData.sidpp}</span>
+                <span>({wellData.wellTVD} x 0.052)</span>
+              </div>
+              <span>+ {wellData.currentMW} =</span>
+              <InteractiveCell name="kmw" value={studentData.kmw} onChange={handleStudentInput} correctValue={calc.kmw} isCalculated={isCalculated} mode={userRole} decimals={1} suffix=" ppg" w="w-20" />
+              <span className="font-black ml-2">KMD</span>
+            </div>
+          </div>
+          <div className="flex justify-between items-center mb-2">
+            <span className="font-black text-sm">INITIAL CIRCULATING<br/>PRESSURE</span>
+            <div className="flex items-center gap-2 font-bold bg-slate-100 p-2 border border-black">
+              <span>{pumpData.scr1} + {kickData.sidpp} =</span>
+              <InteractiveCell name="icp" value={studentData.icp} onChange={handleStudentInput} correctValue={calc.icp} isCalculated={isCalculated} mode={userRole} suffix=" psi" w="w-20" />
+              <span className="font-black ml-2">ICP</span>
+            </div>
+          </div>
+          <div className="flex justify-between items-center mb-2">
+            <span className="font-black text-sm flex items-center">
+              FINAL CIRCULATING<br/>PRESSURE
+              <InstructorNoteInline userRole={userRole} text="FCP Formula: SCR Pressure × (KMW ÷ Current MW). Represents the pressure required to circulate the KMW at the slow pump rate." />
+            </span>
+            <div className="flex items-center gap-2 font-bold bg-slate-100 p-2 border border-black">
+              <span>({calc.kmw.toFixed(1)} / {wellData.currentMW}) x {pumpData.scr1} =</span>
+              <InteractiveCell name="fcp" value={studentData.fcp} onChange={handleStudentInput} correctValue={calc.fcp} isCalculated={isCalculated} mode={userRole} suffix=" psi" w="w-20" />
+              <span className="font-black ml-2">FCP</span>
+            </div>
+          </div>
+          <div className="flex justify-between items-center font-bold">
+            <div className="flex items-center gap-2">
+              <span>(K) = ICP - FCP =</span>
+              <InteractiveCell name="pressureDropTotal" value={studentData.pressureDropTotal} onChange={handleStudentInput} correctValue={calc.pressureDropTotal} isCalculated={isCalculated} mode={userRole} suffix=" psi" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span>(K) x 100 / (E) =</span>
+              <InteractiveCell name="pressureDropPer100" value={studentData.pressureDropPer100} onChange={handleStudentInput} correctValue={calc.pressureDropPer100} isCalculated={isCalculated} mode={userRole} decimals={1} />
+              <span>psi / 100 strokes</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex gap-4">
+        <table className="w-[30%] border-collapse border-[3px] border-black text-center iwcf-table font-bold">
+          <thead className="bg-slate-200 border-b-[3px] border-black">
+            <tr>
+              <th className="p-2 border-r-[3px] border-black">STROKES <InstructorNoteInline userRole={userRole} text="Step intervals are divided exactly into tenths of the total String Volume (Strokes to bit)." /></th>
+              <th className="p-2">PRESSURE<br/>[psi]</th>
+            </tr>
+          </thead>
+          <tbody>
+            {calc.chart && calc.chart.map((pt, i) => (
+              <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                <td className="p-2 border-r-[3px] border-black"><InteractiveCell name={`stepStrokes_${i}`} value={studentData[`stepStrokes_${i}`]} onChange={handleStudentInput} correctValue={pt.strokes} isCalculated={isCalculated} mode={userRole} w="w-full" /></td>
+                <td className="p-2"><InteractiveCell name={`stepPressure_${i}`} value={studentData[`stepPressure_${i}`]} onChange={handleStudentInput} correctValue={pt.pressure} isCalculated={isCalculated} mode={userRole} w="w-full" /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="w-[70%] border-[3px] border-black flex flex-col">
+          <div className="text-center font-black p-2 border-b-[3px] border-black bg-slate-100">STATIC & DYNAMIC DRILL PIPE PRESSURE [psi]</div>
+          <div className="flex-1 relative p-8">
+            {userRole === 'student' && !isCalculated ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-50 text-slate-400 font-black tracking-widest p-8 text-center border-4 border-dashed border-slate-300 m-4">
+                SOLVE KILL PARAMETERS FIRST TO UNLOCK GRAPH
+              </div>
+            ) : (
+              <div className="w-full h-full relative border-l-2 border-b-2 border-black ml-4 mb-4">
+                <svg className="absolute inset-0 w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 100 100">
+                  {[10, 20, 30, 40, 50, 60, 70, 80, 90].map(t => <line key={`h${t}`} x1="0" y1={t} x2="100" y2={t} stroke="#e2e8f0" strokeWidth="0.5" />)}
+                  {[10, 20, 30, 40, 50, 60, 70, 80, 90].map(t => <line key={`v${t}`} x1={t} y1="0" x2={t} y2="100" stroke="#e2e8f0" strokeWidth="0.5" />)}
+                  {calc.stringStks > 0 && <path d="M0,0 L100,100" stroke="black" strokeWidth="2" fill="none" className="animate-draw" strokeLinecap="round" />}
+                </svg>
+                <div className="absolute top-0 left-0 bg-white font-black px-2 py-1 border-2 border-black -ml-6 -mt-3 shadow z-10">ICP: {calc.icp}</div>
+                <div className="absolute bottom-0 right-0 bg-white font-black px-2 py-1 border-2 border-black -mr-6 -mb-3 shadow z-10">FCP: {calc.fcp}</div>
+                <div className="absolute -bottom-8 right-0 font-bold text-xs">STROKES</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {userRole === 'student' && !isCalculated && !hideSubmit && (
+      <div className="no-print mt-10">
+        <button onClick={onStandardSubmit} className="w-full flex items-center justify-center gap-4 px-10 py-6 font-black text-2xl rounded-2xl transition-all shadow-2xl bg-emerald-600 text-white border-b-8 border-emerald-800 hover:bg-emerald-500 hover:translate-y-1 hover:border-b-4">
+          <CheckCircle className="w-8 h-8" /> SUBMIT EXAM & GENERATE SCADA OUTPUT
+        </button>
+      </div>
+    )}
+
+    {!hideSubmit && (
+      <details className="mt-8 border-4 border-slate-800 bg-white shadow-xl no-print rounded-xl overflow-hidden group">
+        <summary className="w-full flex items-center justify-between bg-slate-800 text-white p-4 hover:bg-slate-700 transition-colors cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+          <div className="flex items-center gap-3"><Activity className="w-6 h-6 text-emerald-400" /><h2 className="text-xl font-black uppercase tracking-widest">Output (Quick Results)</h2></div>
+          <span className="group-open:rotate-180 transition-transform duration-300">
+            <ChevronDown className="w-6 h-6" />
+          </span>
+        </summary>
+        <div className="p-6 bg-slate-50 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 border-t-4 border-emerald-500 animate-in slide-in-from-top-2">
+          <OutputRow label="Maximum allowable mud weight before kick" name="mamw" correctValue={calc.mamw} isCalculated={isCalculated} userRole={userRole} studentData={studentData} handleStudentInput={handleStudentInput} decimals={1} suffix=" ppg" />
+          <OutputRow label="MAASP before kick" name="initialMaasp" correctValue={calc.initialMaasp} isCalculated={isCalculated} userRole={userRole} studentData={studentData} handleStudentInput={handleStudentInput} suffix=" psi" />
+          <OutputRow label="Strokes from surface to bit" name="stksToBit" correctValue={calc.stringStks} isCalculated={isCalculated} userRole={userRole} studentData={studentData} handleStudentInput={handleStudentInput} suffix=" stks" />
+          <OutputRow label="Kill mud weight" name="kmw" correctValue={calc.kmw} isCalculated={isCalculated} userRole={userRole} studentData={studentData} handleStudentInput={handleStudentInput} decimals={1} suffix=" ppg" />
+          <OutputRow label="Initial circulating pressure" name="icp" correctValue={calc.icp} isCalculated={isCalculated} userRole={userRole} studentData={studentData} handleStudentInput={handleStudentInput} suffix=" psi" />
+          <OutputRow label="Final circulating pressure" name="fcp" correctValue={calc.fcp} isCalculated={isCalculated} userRole={userRole} studentData={studentData} handleStudentInput={handleStudentInput} suffix=" psi" />
+          <OutputRow label="MAASP after well has been killed" name="finalMaasp" correctValue={calc.finalMaasp} isCalculated={isCalculated} userRole={userRole} studentData={studentData} handleStudentInput={handleStudentInput} suffix=" psi" />
+          <OutputRow label="Pressure drop per step (one-tenth of strokes to Bit)" name="pressDropTenth" correctValue={calc.pressureDropPerTenth} isCalculated={isCalculated} userRole={userRole} studentData={studentData} handleStudentInput={handleStudentInput} suffix=" psi" />
+          <OutputRow label="Pressure drop per step (each 100 stroke from drill string volume)" name="pressDrop100" correctValue={calc.pressureDropPer100} isCalculated={isCalculated} userRole={userRole} studentData={studentData} handleStudentInput={handleStudentInput} decimals={1} suffix=" psi" />
+        </div>
+      </details>
+    )}
+  </div>
+);
+
+// --- 8. EXAM PROMPT COMPONENT ---
+const PaperPrompt = ({ scenario }) => {
+  if (!scenario) return null;
+  return (
+    <div className="bg-amber-50 p-6 border-2 border-amber-200 rounded-xl shadow-inner font-mono text-sm text-slate-800 h-[800px] overflow-y-auto relative">
+      <div className="text-center font-black text-xl mb-6 pb-4 border-b-4 border-amber-200 uppercase tracking-widest">
+        <span className="text-amber-500 block mb-1">IWCF Level 3/4</span>
+        Well Control Examination<br/>
+        <span className="text-base text-amber-700 bg-amber-200 px-3 py-1 rounded inline-block mt-2">PAPER ID: {scenario.id} - {scenario.title}</span>
+      </div>
+      <div className="space-y-4">
+        <AccordionSection title="1. WELL GEOMETRY" defaultOpen={true} colorClass="bg-amber-600">
+          <ul className="list-disc pl-5 space-y-1 p-4 bg-amber-50/50">
+            <li>Total Depth: {scenario.well.wellMD} ft MD / {scenario.well.wellTVD} ft TVD</li>
+            <li>Casing Size: {scenario.well.casingName} inch</li>
+            <li>Shoe Depth: {scenario.well.shoeMD} ft MD / {scenario.well.shoeTVD} ft TVD</li>
+            <li>Open Hole Size: {scenario.well.holeSize} inch</li>
+          </ul>
+        </AccordionSection>
+        <AccordionSection title="2. FLUID & TEST DATA" defaultOpen={true} colorClass="bg-amber-600">
+          <ul className="list-disc pl-5 space-y-1 p-4 bg-amber-50/50">
+            <li>Current Mud Weight: {scenario.well.currentMW} ppg</li>
+            <li>Shoe Test MW: {scenario.well.testMW} ppg</li>
+            <li>Surface Leak-Off Pressure: {scenario.well.lotPressure} psi</li>
+          </ul>
+        </AccordionSection>
+        <AccordionSection title="3. DRILL STRING" defaultOpen={true} colorClass="bg-amber-600">
+          <ul className="list-disc pl-5 space-y-1 p-4 bg-amber-50/50">
+            <li>Drill Pipe: {scenario.string.dpName} inch</li>
+            <li>DP Capacity: {scenario.string.dpCap} bbl/ft</li>
+            <li>DP Metal Displacement: {scenario.string.dpMetalDisp} bbl/ft</li>
+            <li>DP Closed End Disp: {scenario.string.dpClosedDisp} bbl/ft</li>
+            {scenario.string.hwdpLength > 0 && (
+              <li>HWDP: {scenario.string.hwdpName} inch, Length: {scenario.string.hwdpLength} ft, Cap: {scenario.string.hwdpCap} bbl/ft</li>
+            )}
+            <li>Drill Collars: {scenario.string.dcName} inch, Length: {scenario.string.dcLength} ft, Cap: {scenario.string.dcCap} bbl/ft</li>
+          </ul>
+        </AccordionSection>
+        <AccordionSection title="4. ANNULAR CAPS" defaultOpen={true} colorClass="bg-amber-600">
+          <ul className="list-disc pl-5 space-y-1 p-4 bg-amber-50/50">
+            <li>Open Hole / Drill Collar: {scenario.annulus.ohDcCap} bbl/ft</li>
+            <li>Open Hole / Drill Pipe: {scenario.annulus.ohDpCap} bbl/ft</li>
+            <li>Casing / Drill Pipe: {scenario.annulus.csgDpCap} bbl/ft</li>
+          </ul>
+        </AccordionSection>
+        <AccordionSection title="5. PUMP DATA" defaultOpen={true} colorClass="bg-amber-600">
+          <ul className="list-disc pl-5 space-y-1 p-4 bg-amber-50/50">
+            <li>Pump No. 1 Displacement: {scenario.pump.disp1} bbl/stk</li>
+            <li>Slow Pump Rate: {scenario.pump.spm1} SPM</li>
+            <li>Dynamic Pressure Loss (SCR): {scenario.pump.scr1} psi</li>
+            <li>Active Surface Volume: {scenario.pump.activeSurfaceVol || 'N/A'} bbls</li>
+          </ul>
+        </AccordionSection>
+        <AccordionSection title="6. KICK DATA (SHUT-IN)" defaultOpen={true} colorClass="bg-rose-700">
+          <ul className="list-disc pl-5 space-y-1 font-bold p-4 bg-rose-50 text-rose-900 border border-rose-200">
+            <li>SIDPP: {scenario.kick.sidpp} psi</li>
+            <li>SICP: {scenario.kick.sicp} psi</li>
+            <li>Pit Gain: {scenario.kick.pitGain} bbls</li>
+          </ul>
+        </AccordionSection>
+      </div>
+    </div>
+  );
+};
+
+// --- 9. TEST MODE MANAGER COMPONENT ---
+const TestModeManager = ({ formatTime, userRole, setActiveTab }) => {
+  const [testPhase, setTestPhase] = useState('idle'); // idle, active, results, review-sheet
+  const [currentScenario, setCurrentScenario] = useState(null);
+  
+  // Isolated exam states
+  const [testWell, setTestWell] = useState({});
+  const [testString, setTestString] = useState({});
+  const [testAnnulus, setTestAnnulus] = useState({});
+  const [testPump, setTestPump] = useState({});
+  const [testKick, setTestKick] = useState({});
+  const [testStudentData, setTestStudentData] = useState({});
+  
+  const [examGrade, setExamGrade] = useState(null);
+  const [examTime, setExamTime] = useState(0);
+
+  // Auto-calculating correct engine for grading
+  const correctCalc = useMemo(() => {
+    if (!currentScenario) return {};
+    return calculateKillSheet(currentScenario.well, currentScenario.pump, currentScenario.string, currentScenario.annulus, currentScenario.kick);
+  }, [currentScenario]);
+
+  useEffect(() => {
+    let interval;
+    if (testPhase === 'active') interval = setInterval(() => setExamTime(t => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [testPhase]);
+
+  const startExam = (scId) => {
+    const sc = EXAMPLES.find(e => e.id === scId);
+    setCurrentScenario(sc);
+    setTestWell({}); setTestString({}); setTestAnnulus({}); setTestPump({ selectedPump: 1 }); setTestKick({}); setTestStudentData({});
+    setTestPhase('active');
+    setExamTime(0);
+  };
+
+  const handleTestInput = (setter) => (e) => {
+    let val = e.target.value;
+    if (e.target.type === 'number') val = val === '' ? '' : parseFloat(val);
+    setter(prev => ({ ...prev, [e.target.name]: val }));
+  };
+  const handleTestStudentInput = (e) => setTestStudentData(prev => ({ ...prev, [e.target.name]: e.target.value }));
+
+  const submitTestExam = () => {
+    let correctCount = 0; let wrongCount = 0; let details = [];
+
+    const checkField = (name, section, expected, actual, tolerance = 0, isString = false) => {
+      let isCorrect = false;
+      if (isString) {
+        isCorrect = String(actual || '').trim().toLowerCase() === String(expected || '').trim().toLowerCase();
+      } else {
+        const sVal = Number(actual); const eVal = Number(expected);
+        if (actual === undefined || actual === '' || isNaN(sVal)) isCorrect = false;
+        else isCorrect = Math.abs(sVal - eVal) <= tolerance;
+      }
+      if (isCorrect) correctCount++; else wrongCount++;
+      
+      const formatName = name.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+      details.push({ name: formatName, section, expected, actual, isCorrect });
+    };
+
+    // 1. Grade Data Entry
+    const sc = currentScenario;
+    const testInputsMap = { well: testWell, string: testString, annulus: testAnnulus, pump: testPump, kick: testKick };
+    ['well', 'string', 'annulus', 'pump', 'kick'].forEach(cat => {
+      Object.keys(sc[cat]).forEach(key => {
+        if (['date', 'name', 'id', 'title', 'selectedPump'].includes(key)) return;
+        const expected = sc[cat][key];
+        if (expected === '' || expected === undefined || expected === null) return;
+        if (key === 'hwdpName' && sc.string.hwdpLength === 0) return;
+        
+        const actual = testInputsMap[cat]?.[key];
+        const isString = typeof expected === 'string';
+        checkField(`${cat} - ${key}`, 'Data Entry Form', expected, actual, 0, isString);
+      });
+    });
+
+    // 2. Grade Kill Sheet
+    const ksFields = [
+      { key: 'mamw', expected: correctCalc.mamw, tol: 0.2 },
+      { key: 'initialMaasp', expected: correctCalc.initialMaasp, tol: 2 },
+      { key: 'kmw', expected: correctCalc.kmw, tol: 0.2 },
+      { key: 'icp', expected: correctCalc.icp, tol: 2 },
+      { key: 'fcp', expected: correctCalc.fcp, tol: 2 },
+      { key: 'pressureDropTotal', expected: correctCalc.pressureDropTotal, tol: 2 },
+      { key: 'pressureDropPer100', expected: correctCalc.pressureDropPer100, tol: 0.5 },
+      { key: 'stringVol', expected: correctCalc.stringVol, tol: 0.5 },
+      { key: 'stringStks', expected: correctCalc.stringStks, tol: 5 },
+      { key: 'ohVol', expected: correctCalc.ohVol, tol: 0.5 },
+      { key: 'ohStks', expected: correctCalc.ohStks, tol: 5 },
+      { key: 'annVol', expected: correctCalc.annVol, tol: 0.5 },
+      { key: 'annStks', expected: correctCalc.annStks, tol: 5 },
+      { key: 'totalWellStks', expected: correctCalc.totalWellStks, tol: 5 },
+    ];
+    ksFields.forEach(f => checkField(f.key, 'Kill Sheet: Form', f.expected, testStudentData[f.key], f.tol));
+
+    if (correctCalc.chart) {
+      correctCalc.chart.forEach((pt, i) => {
+        checkField(`stepStrokes_${i}`, 'Kill Sheet: Step Down Chart', pt.strokes, testStudentData[`stepStrokes_${i}`], 5);
+        checkField(`stepPressure_${i}`, 'Kill Sheet: Step Down Chart', pt.pressure, testStudentData[`stepPressure_${i}`], 5);
+      });
+    }
+
+    const score = Math.round((correctCount / (correctCount + wrongCount)) * 100);
+    setExamGrade({ score, correctCount, wrongCount, details });
+    setTestPhase('results');
+  };
+
+  if (testPhase === 'idle') {
+    return (
+      <div className="max-w-4xl mx-auto animate-in fade-in duration-500 pb-20">
+        <div className="flex items-center justify-between gap-4 mb-8 border-b-2 border-slate-300 pb-4">
+          <div className="flex items-center gap-4">
+            <Award className="w-8 h-8 text-amber-500" />
+            <div>
+              <h1 className="text-3xl font-black text-slate-800">Formal Examination Mode</h1>
+              <p className="text-slate-500 font-bold">Select an exam paper below to begin the combined simulation.</p>
+            </div>
+          </div>
+          <button onClick={() => setActiveTab('dashboard')} className="px-6 py-2 bg-slate-200 text-slate-700 hover:bg-slate-300 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-sm border border-slate-300">
+            <RotateCcw className="w-4 h-4" /> Exit Test Mode
+          </button>
+        </div>
+        <div className="bg-slate-800 text-white p-6 rounded-xl mb-8 shadow-lg border-l-4 border-amber-500">
+          <h3 className="font-black text-lg mb-2 text-amber-400">Exam Instructions</h3>
+          <p className="text-sm text-slate-300 leading-relaxed">In Test Mode, you will be given a raw paper prompt containing well characteristics. You must extract and enter the data into the <strong>Data Entry Form</strong>, and then utilize those metrics to successfully solve the <strong>Master Kill Sheet</strong>. Your performance across both sections will be graded simultaneously.</p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {EXAMPLES.map(ex => (
+            <button key={ex.id} onClick={() => startExam(ex.id)} className="group p-6 bg-white rounded-xl shadow-md border-2 border-slate-200 hover:border-emerald-500 hover:shadow-xl transition-all text-left relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-2 h-full bg-slate-200 group-hover:bg-emerald-500 transition-colors"></div>
+              <div className="pl-4">
+                <span className="text-xs font-black text-slate-400 uppercase tracking-widest block mb-1">PAPER ID: 0{ex.id}</span>
+                <h3 className="font-black text-2xl text-slate-800">{ex.title}</h3>
+                <div className="mt-4 inline-flex items-center gap-2 text-emerald-600 font-bold text-sm bg-emerald-50 px-3 py-1 rounded">
+                  <PlayCircle className="w-4 h-4"/> Start Simulation
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (testPhase === 'active') {
+    return (
+      <div className="animate-in fade-in duration-500 h-full flex flex-col">
+        <div className="flex justify-between items-center bg-slate-900 text-white p-4 rounded-xl shadow-lg mb-6 shrink-0">
+          <div className="flex items-center gap-3">
+            <Activity className="text-emerald-400 w-6 h-6 animate-pulse"/>
+            <span className="font-black text-xl tracking-widest">EXAM IN PROGRESS</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg font-mono text-xl text-amber-400 border border-slate-700">
+              <Timer className="w-5 h-5" /> {formatTime(examTime)}
+            </div>
+            <button onClick={() => setTestPhase('idle')} className="text-rose-400 hover:text-rose-300 hover:bg-slate-800 px-4 py-2 rounded-lg text-sm font-bold transition-colors">Abort</button>
+          </div>
+        </div>
+
+        <div className="flex-1 flex flex-col md:flex-row gap-6 min-h-0">
+          <div className="w-full md:w-1/3 shrink-0"><PaperPrompt scenario={currentScenario} /></div>
+          <div className="w-full md:w-2/3 overflow-y-auto pr-4 pb-20 space-y-8">
+            <div className="shadow-2xl">
+              <div className="bg-slate-800 text-white p-4 rounded-t-xl font-black text-lg border-b-4 border-emerald-500">SECTION 1: Technical Data Extraction</div>
+              <div className="bg-white p-4 rounded-b-xl border border-slate-300">
+                 <DataEntrySection wellData={testWell} setWellData={setTestWell} stringData={testString} setStringData={setTestString} annulusData={testAnnulus} setAnnulusData={setTestAnnulus} pumpData={testPump} setPumpData={setTestPump} kickData={testKick} setKickData={setTestKick} handleInput={handleTestInput} />
+              </div>
+            </div>
+            <div className="shadow-2xl">
+              <div className="bg-slate-800 text-white p-4 rounded-t-xl font-black text-lg border-b-4 border-emerald-500 mb-6">SECTION 2: Master Kill Sheet Solutions</div>
+              <MasterKillSheetSection wellData={currentScenario.well} pumpData={currentScenario.pump} stringData={currentScenario.string} annulusData={currentScenario.annulus} kickData={currentScenario.kick} studentData={testStudentData} handleStudentInput={handleTestStudentInput} calc={correctCalc} isCalculated={false} userRole="student" hideSubmit={true} />
+            </div>
+            <button onClick={submitTestExam} className="w-full py-6 bg-emerald-600 text-white font-black text-2xl rounded-xl shadow-[0_10px_20px_rgba(16,185,129,0.3)] hover:bg-emerald-500 hover:-translate-y-1 transition-all border-b-8 border-emerald-800 hover:border-b-4">
+              SUBMIT EXAM FOR GRADING
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (testPhase === 'results') {
+    return (
+      <div className="max-w-5xl mx-auto animate-in zoom-in-95 duration-500 pb-20">
+        <div className="bg-white rounded-2xl shadow-2xl overflow-hidden border-2 border-slate-200">
+          <div className="bg-slate-900 p-8 text-center relative overflow-hidden">
+            <div className="absolute inset-0 bg-emerald-500/10 pattern-dots"></div>
+            <h2 className="text-slate-300 font-bold uppercase tracking-widest mb-2 relative z-10">Final Examination Result</h2>
+            <div className="text-8xl font-black text-white relative z-10 tracking-tighter drop-shadow-lg">
+              {examGrade.score}<span className="text-5xl text-slate-400">%</span>
+            </div>
+            {examGrade.score >= 80 ? (
+              <div className="mt-4 inline-block bg-emerald-500 text-white px-6 py-2 rounded-full font-black tracking-widest text-lg shadow-lg">PASSED</div>
+            ) : (
+              <div className="mt-4 inline-block bg-rose-500 text-white px-6 py-2 rounded-full font-black tracking-widest text-lg shadow-lg">FAILED</div>
+            )}
+          </div>
+          
+          <div className="p-8">
+            <div className="flex justify-center gap-8 mb-10">
+              <div className="text-center px-8 py-4 bg-emerald-50 rounded-xl border border-emerald-200 w-48">
+                <div className="text-3xl font-black text-emerald-600 mb-1">{examGrade.correctCount}</div>
+                <div className="text-xs font-bold text-emerald-800 uppercase">Correct Inputs</div>
+              </div>
+              <div className="text-center px-8 py-4 bg-rose-50 rounded-xl border border-rose-200 w-48">
+                <div className="text-3xl font-black text-rose-600 mb-1">{examGrade.wrongCount}</div>
+                <div className="text-xs font-bold text-rose-800 uppercase">Incorrect Inputs</div>
+              </div>
+            </div>
+
+            <h3 className="text-2xl font-black text-slate-800 mb-6 border-b-2 border-slate-100 pb-2">Error Review Log</h3>
+            {examGrade.wrongCount === 0 ? (
+              <div className="p-6 bg-emerald-100 text-emerald-800 font-black rounded-xl text-center border-2 border-emerald-300 flex items-center justify-center gap-3">
+                <Award className="w-8 h-8" /> Flawless Execution! No errors detected.
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-xl border border-slate-300">
+                <table className="w-full text-left text-sm border-collapse">
+                  <thead>
+                    <tr className="bg-slate-800 text-white">
+                      <th className="p-4 font-black">Section</th>
+                      <th className="p-4 font-black">Variable</th>
+                      <th className="p-4 font-black text-rose-300">Your Entry</th>
+                      <th className="p-4 font-black text-emerald-300">Expected Value</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 font-bold bg-white">
+                    {examGrade.details.filter(d => !d.isCorrect).map((err, i) => (
+                      <tr key={i} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 text-slate-500">{err.section}</td>
+                        <td className="p-4 text-slate-800">{err.name}</td>
+                        <td className="p-4 text-rose-600 bg-rose-50/50">{err.actual || 'BLANK'}</td>
+                        <td className="p-4 text-emerald-600 bg-emerald-50/50">{err.expected}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <button onClick={() => setTestPhase('review-sheet')} className="py-4 bg-slate-800 text-white font-black rounded-xl hover:bg-slate-700 shadow-lg flex items-center justify-center gap-2">
+                <FileText className="w-5 h-5"/> REVIEW MASTER KILL SHEET
+              </button>
+              <button onClick={() => setTestPhase('idle')} className="py-4 bg-white text-slate-800 font-black rounded-xl border-2 border-slate-300 hover:bg-slate-50 shadow-sm flex items-center justify-center gap-2">
+                <RotateCcw className="w-5 h-5"/> RETURN TO TEST MENU
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (testPhase === 'review-sheet') {
+    return (
+      <div className="max-w-[1100px] mx-auto animate-in slide-in-from-right-8 duration-500 pb-20">
+        <div className="flex items-center justify-between bg-slate-900 text-white p-4 rounded-xl shadow-lg mb-8 shrink-0 no-print">
+          <div className="flex items-center gap-3">
+            <Target className="text-amber-400 w-6 h-6"/>
+            <span className="font-black text-xl tracking-widest">EXAM REVIEW MODE</span>
+          </div>
+          <button onClick={() => setTestPhase('results')} className="px-6 py-2 bg-slate-700 hover:bg-slate-600 rounded font-bold text-sm transition-colors">Back to Scorecard</button>
+        </div>
+        
+        <MasterKillSheetSection wellData={currentScenario.well} pumpData={currentScenario.pump} stringData={currentScenario.string} annulusData={currentScenario.annulus} kickData={currentScenario.kick} studentData={testStudentData} handleStudentInput={()=>{}} calc={correctCalc} isCalculated={true} userRole="student" hideSubmit={true} showOutput={false} />
+      </div>
+    );
+  }
+
+  return null;
+};
+
+// --- 10. MAIN APP WRAPPER ---
+export default function App() {
+  const [platformLaunched, setPlatformLaunched] = useState(false);
+  const [appMode, setAppMode] = useState('gateway'); 
+  const [userRole, setUserRole] = useState('student'); 
+  const [activeTab, setActiveTab] = useState('userguide'); 
+  const [activeExTab, setActiveExTab] = useState(1);
+  const [isCalculated, setIsCalculated] = useState(false);
+  const [examTime, setExamTime] = useState(0);
+  const [showOutput, setShowOutput] = useState(false);
+
+  const [wellData, setWellData] = useState({ date: new Date().toISOString().split('T')[0], name: '' });
+  const [pumpData, setPumpData] = useState({ selectedPump: 1 });
+  const [stringData, setStringData] = useState({});
+  const [annulusData, setAnnulusData] = useState({});
+  const [kickData, setKickData] = useState({});
+  const [studentData, setStudentData] = useState({});
+
+  useEffect(() => {
+    let interval;
+    if (appMode === 'app' && userRole === 'student' && !isCalculated && activeTab === 'dashboard') {
+      interval = setInterval(() => setExamTime(t => t + 1), 1000);
+    }
+    return () => clearInterval(interval);
+  }, [appMode, userRole, isCalculated, activeTab]);
+
+  const formatTime = (secs) => {
+    const h = Math.floor(secs / 3600); const m = Math.floor((secs % 3600) / 60).toString().padStart(2, '0'); const s = (secs % 60).toString().padStart(2, '0');
+    return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
+  };
+
+  const handleInput = (setter) => (e) => {
+    if (userRole === 'student') setIsCalculated(false);
+    let val = e.target.value;
+    if (e.target.type === 'number') val = val === '' ? '' : parseFloat(val);
+    setter(prev => ({ ...prev, [e.target.name]: val }));
+  };
+
+  const handleStudentInput = (e) => setStudentData(prev => ({ ...prev, [e.target.name]: e.target.value }));
+
+  const loadScenario = (exId) => {
+    const ex = EXAMPLES.find(e => e.id === exId);
+    setWellData(ex.well); setStringData(ex.string); setAnnulusData(ex.annulus); setKickData(ex.kick); setPumpData(ex.pump);
+    setIsCalculated(false); setStudentData({}); setExamTime(0); setActiveTab('dashboard');
+  };
+
+  const calc = useMemo(() => calculateKillSheet(wellData, pumpData, stringData, annulusData, kickData), [wellData, pumpData, stringData, annulusData, kickData]);
+
+  if (!platformLaunched) {
+    return (
+      <div 
+        className="gateway-full bg-slate-950 flex flex-col items-center justify-center cursor-pointer transition-transform duration-500 hover:scale-[1.02]" 
+        onClick={() => { enterFullscreen(); setPlatformLaunched(true); }}
+      >
+         <GlobalStyles />
+         <RigSVG />
+         <h1 className="text-4xl md:text-5xl font-black text-white mt-8 mb-4 tracking-widest text-center px-4 animate-pulse">TAP TO LAUNCH PLATFORM</h1>
+         <div className="flex items-center gap-2 text-emerald-500 font-bold uppercase tracking-widest">
+           <Maximize className="w-5 h-5" /> Enters Fullscreen Mode
+         </div>
+      </div>
+    );
+  }
+
+  if (appMode === 'gateway') {
+    return (
+      <div className="gateway-full">
+        <GlobalStyles />
+        <div className="text-center z-10 p-12 bg-slate-900/60 backdrop-blur-2xl rounded-3xl border border-slate-700 shadow-2xl max-w-4xl w-full mx-4">
+          <RigSVG />
+          <div className="inline-flex items-center gap-2 bg-slate-800 px-4 py-1.5 rounded-full border border-slate-700 mb-6">
+            <ShieldCheck className="w-5 h-5 text-amber-500" />
+            <span className="text-xs font-bold tracking-widest text-slate-300 uppercase">API Standard 16D Compliant</span>
+          </div>
+          <h1 className="text-6xl md:text-7xl font-black mb-4 tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-sky-400">
+            WELLSAFE ADVANCED
+          </h1>
+          <p className="text-slate-400 text-xl md:text-2xl mb-12 font-medium">Industrial Well Control Training & Simulation Environment</p>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <button onClick={() => { setUserRole('instructor'); setAppMode('app'); setActiveTab('userguide'); }} className="group px-8 py-8 bg-slate-800/80 border-2 border-slate-700 hover:border-emerald-500 rounded-2xl transition-all duration-300 hover:shadow-[0_0_30px_rgba(16,185,129,0.2)] hover:-translate-y-2 flex flex-col items-center gap-4">
+              <HardHat className="w-12 h-12 text-emerald-500 group-hover:scale-110 transition-transform" />
+              <div>
+                <h2 className="text-2xl font-black text-white">Instructor Mode</h2>
+                <p className="text-slate-400 text-sm mt-2">Auto-calculating SCADA interface with scenario management.</p>
+              </div>
+            </button>
+            <button onClick={() => { setUserRole('student'); setAppMode('app'); setActiveTab('testmode'); setIsCalculated(false); setExamTime(0); }} className="group px-8 py-8 bg-slate-800/80 border-2 border-slate-700 hover:border-sky-500 rounded-2xl transition-all duration-300 hover:shadow-[0_0_30px_rgba(56,189,248,0.2)] hover:-translate-y-2 flex flex-col items-center gap-4">
+              <GraduationCap className="w-12 h-12 text-sky-500 group-hover:scale-110 transition-transform" />
+              <div>
+                <h2 className="text-2xl font-black text-white">Student Portal</h2>
+                <p className="text-slate-400 text-sm mt-2">Interactive testing environment with timer and strict grading.</p>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-dvh bg-slate-100 scada-grid overflow-hidden">
+      <GlobalStyles />
+      
+      {activeTab !== 'testmode' && (
+        <aside className="w-72 bg-slate-900 flex flex-col shrink-0 border-r border-slate-800 z-20 no-print shadow-2xl">
+          <div className="p-8 border-b border-slate-800">
+            <h2 className="text-3xl font-black text-white flex items-center gap-3"><Droplets className="text-emerald-500"/> WELLSAFE</h2>
+            <p className="text-slate-500 text-xs font-bold mt-2 uppercase tracking-widest">Simulator active</p>
+          </div>
+          <nav className="flex-1 py-4 space-y-1 overflow-y-auto">
+            {userRole === 'student' && (
+              <div className="mb-4">
+                <SidebarItem id="testmode" activeTab={activeTab} setActiveTab={setActiveTab} icon={Award} label="Exam: Test Mode" highlight={true} />
+                <div className="my-2 border-t border-slate-800 mx-4"></div>
+              </div>
+            )}
+            <SidebarItem id="userguide" activeTab={activeTab} setActiveTab={setActiveTab} icon={BookOpen} label="User Guide" />
+            <SidebarItem id="dataentry" activeTab={activeTab} setActiveTab={setActiveTab} icon={TableProperties} label="Technical Data Entry" />
+            <SidebarItem id="dashboard" activeTab={activeTab} setActiveTab={setActiveTab} icon={LayoutDashboard} label="Master Kill Sheet" />
+            <SidebarItem id="examples" activeTab={activeTab} setActiveTab={setActiveTab} icon={Database} label="Guide Scenarios" visible={userRole === 'instructor'} />
+            <div className="my-4 border-t border-slate-800"></div>
+            <SidebarItem id="procedures" activeTab={activeTab} setActiveTab={setActiveTab} icon={ClipboardList} label="Kill Procedures" />
+            <SidebarItem id="rounding" activeTab={activeTab} setActiveTab={setActiveTab} icon={Info} label="API Rounding Rules" />
+          </nav>
+          <div className="p-6 border-t border-slate-800">
+            <button onClick={() => { setPlatformLaunched(false); setAppMode('gateway'); setStudentData({}); setIsCalculated(false); setShowOutput(false); exitFullscreen(); }} className="w-full py-3 rounded-lg border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all text-xs font-bold uppercase tracking-widest">
+              End Session
+            </button>
+          </div>
+        </aside>
+      )}
+
+      <main className="flex-1 flex flex-col relative overflow-hidden">
+        {activeTab !== 'testmode' && (
+          <div className="no-print bg-amber-500 text-slate-900 px-6 py-2 shadow-md z-10 flex justify-between items-center shrink-0">
+            <div className="flex items-center gap-4 text-xs font-black uppercase tracking-widest">
+              <span className="flex items-center gap-2"><Activity className="w-4 h-4"/> SCADA SHELL ACTIVE</span>
+              <span className="px-3 py-1 bg-slate-900 text-amber-500 rounded">{userRole} Mode</span>
+            </div>
+            {userRole === 'student' && activeTab === 'dashboard' && (
+              <div className="flex items-center gap-2 bg-slate-900 text-white px-4 py-1.5 rounded font-mono text-lg shadow-inner">
+                <Timer className="w-4 h-4 text-amber-400" /> {formatTime(examTime)}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex-1 overflow-y-auto p-8 relative">
+          
+          {activeTab === 'testmode' && userRole === 'student' && (
+             <TestModeManager formatTime={formatTime} userRole={userRole} setActiveTab={setActiveTab} />
+          )}
+
+          {activeTab === 'userguide' && (
+            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-20">
+              <div className="flex items-center gap-4 mb-8 border-b-2 border-slate-300 pb-4">
+                <BookOpen className="w-8 h-8 text-emerald-600" />
+                <div>
+                  <h1 className="text-3xl font-black text-slate-800">Platform User Guide</h1>
+                  <p className="text-slate-500 font-bold">Step-by-step instructions for utilizing the WellSafe Simulator.</p>
+                </div>
+              </div>
+
+              <div className="bg-white p-8 rounded-xl shadow-xl border border-slate-200 text-slate-800 space-y-8">
+                <div className="bg-slate-50 border-l-4 border-emerald-500 p-4 rounded text-slate-700 font-medium">
+                  <h2 className="text-lg font-black text-slate-900 mb-2">Welcome to WellSafe Advanced</h2>
+                  <p>This simulator is designed to digitally replicate the official IWCF Surface BOP Vertical Well Kill Sheet. It enforces strict API RP-59 rounding rules and provides a realistic environment for both learning and assessment.</p>
+                </div>
+
+                <div className="space-y-8">
+                  <div className="flex gap-4">
+                    <div className="flex-shrink-0 w-10 h-10 bg-emerald-100 text-emerald-700 font-black rounded-full flex items-center justify-center text-xl shadow-sm border border-emerald-200">1</div>
+                    <div>
+                      <h3 className="text-xl font-black mb-2 text-slate-800">Enter Technical Data</h3>
+                      <p className="text-slate-600 font-medium mb-3">Begin by navigating to the <strong>Technical Data Entry</strong> tab. Carefully input all known well parameters including Hole Dimensions, Internal Capacities, Leak-Off Test (LOT) data, Pump Details, and Shut-in Kick Data.</p>
+                      <InstructorVoiceNote userRole={userRole} text="You can bypass manual entry by loading a pre-built scenario from the Guide Scenarios tab to instantly populate the simulator with accurate testing data." />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4">
+                    <div className="flex-shrink-0 w-10 h-10 bg-emerald-100 text-emerald-700 font-black rounded-full flex items-center justify-center text-xl shadow-sm border border-emerald-200">2</div>
+                    <div>
+                      <h3 className="text-xl font-black mb-2 text-slate-800">Complete the Master Kill Sheet</h3>
+                      <p className="text-slate-600 font-medium mb-3">Proceed to the <strong>Master Kill Sheet</strong> tab. This area serves as your primary workspace, formatted exactly like the IWCF examination paper.</p>
+                      <ul className="list-none space-y-2">
+                        <li className="flex items-start gap-2 text-slate-600 font-medium bg-slate-50 p-2 rounded">
+                          <Award className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                          <span><strong>Test Mode:</strong> Specifically designed for students, this tab provides a scenario prompt and grades both your data entry and math simultaneously.</span>
+                        </li>
+                        <li className="flex items-start gap-2 text-slate-600 font-medium bg-slate-50 p-2 rounded">
+                          <HardHat className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                          <span><strong>Instructor Mode:</strong> All fields, including the Step-Down chart, are auto-calculated instantly as data is entered. Use this mode for live demonstrations.</span>
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'dataentry' && (
+            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-20">
+              <div className="flex items-center gap-4 mb-8 border-b-2 border-slate-300 pb-4">
+                <TableProperties className="w-8 h-8 text-emerald-600" />
+                <div>
+                  <h1 className="text-3xl font-black text-slate-800">Raw Data Input</h1>
+                  <p className="text-slate-500 font-bold">Structure matching standard Well Data sheet for precise simulation.</p>
+                </div>
+              </div>
+              
+              <InstructorVoiceNote userRole={userRole} title="Data Entry" text="Always double-check your tubular measurements. Verify if capacities are listed as 'barrels per foot' or 'barrels per meter' to avoid catastrophic volume discrepancies." />
+              
+              <DataEntrySection wellData={wellData} setWellData={setWellData} stringData={stringData} setStringData={setStringData} annulusData={annulusData} setAnnulusData={setAnnulusData} pumpData={pumpData} setPumpData={setPumpData} kickData={kickData} setKickData={setKickData} handleInput={handleInput} />
+            </div>
+          )}
+
+          {activeTab === 'dashboard' && (
+            <div className="animate-in fade-in duration-500">
+               <MasterKillSheetSection wellData={wellData} pumpData={pumpData} stringData={stringData} annulusData={annulusData} kickData={kickData} studentData={studentData} handleStudentInput={handleStudentInput} calc={calc} isCalculated={isCalculated} userRole={userRole} hideSubmit={false} onStandardSubmit={() => setIsCalculated(true)} showOutput={showOutput} setShowOutput={setShowOutput} />
+            </div>
+          )}
+
+          {activeTab === 'examples' && userRole === 'instructor' && (
+            <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-500">
+              <div className="flex items-center gap-4 mb-8 border-b-2 border-slate-300 pb-4">
+                <Database className="w-8 h-8 text-emerald-600" />
+                <div>
+                  <h1 className="text-3xl font-black text-slate-800">Scenario Manager</h1>
+                  <p className="text-slate-500 font-bold">Technical Legend & Baseline Data injection module.</p>
+                </div>
+              </div>
+
+              <InstructorVoiceNote userRole={userRole} text="Use these baseline scenarios for rapid classroom setup. They cover the four most common well control events encountered on vertical surface BOP rigs." />
+
+              <div className="flex gap-2 bg-slate-200 p-1.5 rounded-xl w-fit shadow-inner">
+                {EXAMPLES.map(ex => (
+                  <button 
+                    key={ex.id} onClick={() => setActiveExTab(ex.id)}
+                    className={`px-6 py-2 rounded-lg font-bold text-sm transition-all ${activeExTab === ex.id ? 'bg-white text-slate-900 shadow-md' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-300/50'}`}
+                  >
+                    Scenario 0{ex.id}
+                  </button>
+                ))}
+              </div>
+
+              <div className="bg-white border-2 border-slate-300 shadow-xl rounded-xl overflow-hidden">
+                <div className="bg-slate-800 p-6 flex justify-between items-center border-b-4 border-emerald-500">
+                  <div>
+                    <h2 className="text-2xl font-black text-white">{EXAMPLES.find(e => e.id === activeExTab).title}</h2>
+                    <span className="text-emerald-400 text-xs font-bold uppercase tracking-widest">Master Kill Sheet Parameters</span>
+                  </div>
+                  <button onClick={() => loadScenario(activeExTab)} className="flex items-center gap-2 bg-emerald-600 px-6 py-3 rounded-lg font-black text-white hover:bg-emerald-500 shadow-lg transition-transform hover:-translate-y-0.5">
+                    <Layers className="w-5 h-5" /> PUSH TO MASTER SHEET
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse min-w-[800px]">
+                    <thead className="bg-slate-100 text-slate-600 text-xs uppercase font-black tracking-wider border-b-2 border-slate-300">
+                      <tr>
+                        <th className="p-4 border-r border-slate-200 w-1/5 bg-slate-200">Operational Category</th>
+                        <th className="p-4 border-r border-slate-200">Input Data 01</th>
+                        <th className="p-4 border-r border-slate-200">Input Data 02</th>
+                        <th className="p-4 border-r border-slate-200">Input Data 03</th>
+                        <th className="p-4">Input Data 04</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-sm font-bold text-slate-800 divide-y divide-slate-200">
+                      <tr className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 bg-slate-100 border-r border-slate-200 text-slate-600 uppercase text-xs tracking-wide">Operational Geometry</td>
+                        <td className="p-4 border-r border-slate-200"><span className="text-slate-400 text-xs block">Well MD</span>{EXAMPLES[activeExTab-1].well.wellMD} ft</td>
+                        <td className="p-4 border-r border-slate-200"><span className="text-slate-400 text-xs block">Well TVD</span>{EXAMPLES[activeExTab-1].well.wellTVD} ft</td>
+                        <td className="p-4 border-r border-slate-200"><span className="text-slate-400 text-xs block">Shoe TVD</span>{EXAMPLES[activeExTab-1].well.shoeTVD} ft</td>
+                        <td className="p-4"><span className="text-slate-400 text-xs block">Casing Size</span>{EXAMPLES[activeExTab-1].well.casingName}"</td>
+                      </tr>
+                      <tr className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 bg-slate-100 border-r border-slate-200 text-slate-600 uppercase text-xs tracking-wide">Fluid Metrics</td>
+                        <td className="p-4 border-r border-slate-200"><span className="text-slate-400 text-xs block">Current MW</span>{EXAMPLES[activeExTab-1].well.currentMW} ppg</td>
+                        <td className="p-4 border-r border-slate-200"><span className="text-slate-400 text-xs block">Test MW</span>{EXAMPLES[activeExTab-1].well.testMW} ppg</td>
+                        <td className="p-4 border-r border-slate-200"><span className="text-slate-400 text-xs block">Leak Off Pressure</span>{EXAMPLES[activeExTab-1].well.lotPressure} psi</td>
+                        <td className="p-4"><span className="text-slate-400 text-xs block">Pit Gain</span>{EXAMPLES[activeExTab-1].kick.pitGain} bbl</td>
+                      </tr>
+                      <tr className="hover:bg-slate-50 transition-colors bg-rose-50/30">
+                        <td className="p-4 bg-rose-100 border-r border-rose-200 text-rose-800 uppercase text-xs tracking-wide">Pressure Profile</td>
+                        <td className="p-4 border-r border-slate-200 text-rose-700"><span className="text-rose-400 text-xs block">SIDPP</span>{EXAMPLES[activeExTab-1].kick.sidpp} psi</td>
+                        <td className="p-4 border-r border-slate-200 text-rose-700"><span className="text-rose-400 text-xs block">SICP</span>{EXAMPLES[activeExTab-1].kick.sicp} psi</td>
+                        <td className="p-4 border-r border-slate-200"><span className="text-slate-400 text-xs block">SCR Pressure</span>{EXAMPLES[activeExTab-1].pump.scr1} psi</td>
+                        <td className="p-4"><span className="text-slate-400 text-xs block">SCR SPM</span>{EXAMPLES[activeExTab-1].pump.spm1} SPM</td>
+                      </tr>
+                      <tr className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 bg-slate-100 border-r border-slate-200 text-slate-600 uppercase text-xs tracking-wide">Pump Parameters</td>
+                        <td className="p-4 border-r border-slate-200"><span className="text-slate-400 text-xs block">Pump Disp.</span>{EXAMPLES[activeExTab-1].pump.disp1} bbl/stk</td>
+                        <td className="p-4 border-r border-slate-200"><span className="text-slate-400 text-xs block">DP Capacity</span>{EXAMPLES[activeExTab-1].string.dpCap} bbl/ft</td>
+                        <td className="p-4 border-r border-slate-200"><span className="text-slate-400 text-xs block">DC Capacity</span>{EXAMPLES[activeExTab-1].string.dcCap} bbl/ft</td>
+                        <td className="p-4"><span className="text-slate-400 text-xs block">OH/DP Annulus</span>{EXAMPLES[activeExTab-1].annulus.ohDpCap} bbl/ft</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'procedures' && (
+            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-20">
+              <div className="flex items-center gap-4 mb-8 border-b-2 border-slate-300 pb-4">
+                <ClipboardList className="w-8 h-8 text-emerald-600" />
+                <div>
+                  <h1 className="text-3xl font-black text-slate-800">Well Kill Procedures</h1>
+                  <p className="text-slate-500 font-bold uppercase tracking-widest text-sm text-emerald-600">In full compliance with API RP-59</p>
+                </div>
+              </div>
+              
+              <InstructorVoiceNote userRole={userRole} title="Kill Methodology" text="The simulator calculations assume the Wait & Weight method as default for the step-down chart. Ensure students understand both methodologies before attempting the practical exams." />
+
+              <AccordionSection title="1. Wait & Weight Method" defaultOpen={true} colorClass="bg-slate-800">
+                <div className="bg-white p-6 rounded-b-xl">
+                  <p className="mb-4 text-slate-600 font-medium">As per API RP-59 guidelines, the Wait & Weight method kills the well in a single circulation. The drill string is displaced with Kill Mud while maintaining bottom hole pressure.</p>
+                  <ul className="list-decimal pl-6 space-y-3 font-bold bg-slate-50 p-6 border border-slate-200 rounded text-slate-700">
+                    <li><span className="text-slate-900">Shut-in the well:</span> Record SIDPP, SICP, and Pit Gain after pressures stabilize.</li>
+                    <li><span className="text-slate-900">Calculate Kill Mud Weight (KMW):</span> Increase surface mud density to required KMW.</li>
+                    <li><span className="text-slate-900">Start Circulation:</span> Bring pump up to the Slow Circulating Rate (SCR) while keeping casing pressure constant at SICP.</li>
+                    <li><span className="text-slate-900">Follow Step-Down Chart:</span> Adjust the choke to follow the calculated pressure step-down schedule from ICP down to FCP as kill mud travels to the bit.</li>
+                    <li><span className="text-slate-900">Hold FCP:</span> Once kill mud reaches the bit, hold Drill Pipe pressure constant at FCP until kill mud returns to surface.</li>
+                  </ul>
+                </div>
+              </AccordionSection>
+
+              <AccordionSection title="2. Driller's Method" colorClass="bg-slate-800">
+                <div className="bg-white p-6 rounded-b-xl">
+                  <p className="mb-4 text-slate-600 font-medium">The Driller's Method consists of two distinct circulations. First to remove the influx, second to circulate Kill Mud.</p>
+                  <div className="space-y-4">
+                    <div className="bg-blue-50 p-6 border border-blue-200 rounded">
+                      <h3 className="font-black text-blue-900 mb-2">First Circulation (Original Mud)</h3>
+                      <ul className="list-disc pl-5 space-y-2 font-bold text-blue-800">
+                        <li>Bring pump up to SCR holding Casing Pressure constant at SICP.</li>
+                        <li>Hold Drill Pipe pressure constant at Initial Circulating Pressure (ICP) until the influx is completely circulated out of the well.</li>
+                        <li>Shut in well. SIDPP should now equal SICP.</li>
+                      </ul>
+                    </div>
+                    <div className="bg-emerald-50 p-6 border border-emerald-200 rounded">
+                      <h3 className="font-black text-emerald-900 mb-2">Second Circulation (Kill Mud Weight)</h3>
+                      <ul className="list-disc pl-5 space-y-2 font-bold text-emerald-800">
+                        <li>Bring pump up to SCR while holding Casing Pressure constant at the new SICP.</li>
+                        <li>Hold Casing Pressure constant until Kill Mud Weight reaches the bit.</li>
+                        <li>Once KMW reaches the bit, hold Drill Pipe Pressure constant at Final Circulating Pressure (FCP) until KMW returns to surface.</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </AccordionSection>
+            </div>
+          )}
+
+          {activeTab === 'rounding' && (
+            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-20">
+              <div className="flex items-center gap-4 mb-8 border-b-2 border-slate-300 pb-4">
+                <Info className="w-8 h-8 text-emerald-600" />
+                <div>
+                  <h1 className="text-3xl font-black text-slate-800">API Rounding Procedures</h1>
+                  <p className="text-slate-500 font-bold uppercase tracking-widest text-sm text-emerald-600">In full compliance with IWCF / IADC rules</p>
+                </div>
+              </div>
+              
+              <InstructorVoiceNote userRole={userRole} title="Dynamic Tolerance" text="The simulator grades with a dynamic tolerance logic. E.g. If expected pressure is 2450 psi, a tolerance window of ±5 psi is allowed to account for manual human rounding differences on intermediate steps." />
+
+              <div className="bg-slate-100 p-4 border-l-4 border-slate-500 rounded font-medium text-slate-700 mb-8 shadow-sm">
+                In well control engineering, rounding rules are strictly enforced to guarantee safety margins. Improper rounding can result in underbalancing the formation or exceeding the casing shoe fracture gradient.
+              </div>
+
+              <div className="space-y-4">
+                <AccordionSection title="Kill Mud Weight (KMW)" defaultOpen={true} colorClass="bg-emerald-800">
+                  <div className="p-6 bg-emerald-50/50">
+                    <p className="font-bold text-emerald-800 text-lg mb-4">RULE: ROUND UP to 1 decimal place.</p>
+                    <p className="text-sm text-emerald-700 font-medium">To guarantee the well remains overbalanced during kill operations, mud weight is always rounded up.</p>
+                    <div className="mt-4 font-mono font-bold bg-white p-3 border border-emerald-200 rounded text-center">e.g., 11.21 ppg &rarr; 11.3 ppg</div>
+                  </div>
+                </AccordionSection>
+
+                <AccordionSection title="MAASP / Leak-Off" defaultOpen={true} colorClass="bg-orange-800">
+                  <div className="p-6 bg-orange-50/50">
+                    <p className="font-bold text-orange-800 text-lg mb-4">RULE: ROUND DOWN to nearest whole number.</p>
+                    <p className="text-sm text-orange-700 font-medium">To prevent fracturing the casing shoe, Maximum Allowable Annular Surface Pressure is always rounded down.</p>
+                    <div className="mt-4 font-mono font-bold bg-white p-3 border border-orange-200 rounded text-center">e.g., 694.8 psi &rarr; 694 psi</div>
+                  </div>
+                </AccordionSection>
+
+                <AccordionSection title="Pressures & Strokes" defaultOpen={true} colorClass="bg-blue-800">
+                  <div className="p-6 bg-blue-50/50">
+                    <p className="font-bold text-blue-800 text-lg mb-4">RULE: ROUND to nearest whole number.</p>
+                    <p className="text-sm text-blue-700 font-medium">ICP, FCP, pump strokes, and time metrics are rounded mathematically to the nearest integer.</p>
+                    <div className="mt-4 font-mono font-bold bg-white p-3 border border-blue-200 rounded text-center">e.g., 1045.6 psi &rarr; 1046 psi</div>
+                  </div>
+                </AccordionSection>
+                
+                <AccordionSection title="EXACT MATHEMATICS" colorClass="bg-slate-800">
+                  <div className="p-6 bg-white">
+                    <p className="font-bold text-slate-700 mb-2">The following variables are kept exactly as recorded:</p>
+                    <ul className="list-disc list-inside text-sm font-bold text-slate-600 space-y-1">
+                      <li>Tubular Volumes (kept to 1 decimal internally)</li>
+                      <li>Pump Output Capacity</li>
+                      <li>Measured & True Vertical Depths</li>
+                      <li>Slow Circulating Rate (SCR) values</li>
+                    </ul>
+                  </div>
+                </AccordionSection>
+              </div>
+            </div>
+          )}
+
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// Mini Rig SVG Component
+const RigSVG = () => (
+  <svg viewBox="0 0 100 100" className="w-32 h-32 mx-auto text-emerald-500 mb-6 drop-shadow-[0_0_30px_rgba(16,185,129,0.8)]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M50 10 L35 90 M50 10 L65 90" /> 
+    <path d="M37 80 L63 80 M40 60 L60 60 M43 40 L57 40 M47 20 L53 20" /> 
+    <path d="M37 80 L60 60 M63 80 L40 60 M40 60 L57 40 M60 60 L43 40" className="opacity-70" /> 
+    <circle cx="50" cy="8" r="3" fill="#10b981" stroke="none" className="animate-pulse" />
+    <path d="M20 90 L80 90 L80 100 L20 100 Z" fill="currentColor" stroke="none" />
+  </svg>
+);
