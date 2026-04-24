@@ -155,14 +155,39 @@
     const InstructorVoiceNote = ({ title, text, userRole }) => {
       const [playing, setPlaying] = useState(false);
       
+      useEffect(() => {
+        // Cleanup speech synthesis if component unmounts
+        return () => {
+          window.speechSynthesis.cancel();
+        };
+      }, []);
+
       if (userRole !== 'instructor' || !text) return null;
+      
+      const togglePlay = () => {
+        if (playing) {
+          window.speechSynthesis.cancel();
+          setPlaying(false);
+        } else {
+          if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel(); // Stop any current speech
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.onend = () => setPlaying(false);
+            utterance.onerror = () => setPlaying(false);
+            window.speechSynthesis.speak(utterance);
+            setPlaying(true);
+          } else {
+            console.warn("Text-to-speech is not supported in this browser.");
+          }
+        }
+      };
       
       return (
         <div className="bg-slate-900 border-l-4 border-emerald-500 p-4 mb-6 rounded-xl shadow-lg flex flex-col md:flex-row gap-4 text-emerald-50 items-start md:items-center no-print relative overflow-hidden group">
           <div className="absolute inset-0 bg-emerald-500/5 pattern-dots pointer-events-none"></div>
           
           <button 
-            onClick={() => setPlaying(!playing)} 
+            onClick={togglePlay} 
             className={`relative z-10 flex-shrink-0 w-14 h-14 rounded-full flex items-center justify-center transition-all duration-300 ${playing ? 'bg-emerald-500 text-slate-900 shadow-[0_0_20px_rgba(16,185,129,0.5)]' : 'bg-slate-800 text-emerald-400 border-2 border-emerald-500 hover:bg-emerald-500 hover:text-slate-900'}`}
           >
             {playing ? <Square className="w-5 h-5 fill-current" /> : <PlayCircle className="w-7 h-7 fill-current" />}
